@@ -5,14 +5,12 @@ Revises:
 Create Date: 2026-11-03
 """
 
-from typing import Sequence, Union
-
-from alembic import op
+from collections.abc import Sequence
 
 revision: str = "0001_empty_baseline"
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -21,4 +19,3 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Remove only the baseline revision marker."""
-

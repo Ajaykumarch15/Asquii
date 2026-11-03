@@ -3,9 +3,8 @@
 from unittest.mock import Mock
 
 import pytest
-from fastapi import HTTPException
-
 from app.database import session
+from fastapi import HTTPException
 
 
 def test_missing_database_fails_safely(monkeypatch):
