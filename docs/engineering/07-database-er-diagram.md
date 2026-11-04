@@ -1,6 +1,6 @@
-# 07 — Finalized proposed database ER diagram
+# 07 — MVP database ER diagram
 
-Planning diagram; table names and relationships align with [06](06-database-design.md). `auth.users` is external Supabase identity ownership. Notification tables are conditional.
+Implemented table names and relationships align with [06](06-database-design.md) and Alembic revision `0002_mvp_schema`. `auth.users` remains external Supabase identity ownership. Conditional notification tables are not part of this schema.
 
 ```mermaid
 erDiagram
@@ -26,9 +26,7 @@ erDiagram
   PROFILES ||--o{ USER_RESOURCE_PREFERENCES : configures
   RESOURCES ||--o{ USER_RESOURCE_PREFERENCES : starred_by
   WORKSPACES ||--o{ ACTIVITY_LOGS : records
-  PROFILES o|--o{ ACTIVITY_LOGS : actor
-  WORKSPACE_MEMBERS ||--o{ NOTIFICATION_PREFERENCES : owns
-  WORKSPACE_MEMBERS ||--o{ NOTIFICATIONS : receives
+  WORKSPACE_MEMBERS o|--o{ ACTIVITY_LOGS : actor
 ```
 
-The project-member links to task assignee, comment author, meeting attendee, and resource owner all represent composite same-project membership FKs. Exactly one active workspace Owner is enforced transactionally; the relationship is stored in workspace_members and no owner_id exists on workspaces.
+The project-member links to task assignee, comment author, meeting attendee, and resource owner represent composite same-project membership FKs. Project and child rows also carry workspace context where needed for composite tenant constraints. Exactly one active workspace Owner is checked transactionally; the relationship is stored in `workspace_members`, and `workspaces` has no `owner_id`. Deferred database triggers enforce the Owner and Project Manager minimum-count invariants at transaction end.
