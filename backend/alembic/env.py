@@ -2,6 +2,7 @@
 
 from logging.config import fileConfig
 
+import app.models  # noqa: F401
 from alembic import context
 from app.core.config import get_settings
 from app.database.base import Base
@@ -13,8 +14,24 @@ if config.config_file_name is not None:
 
 settings = get_settings()
 if settings.database_url is not None:
-    config.set_main_option("sqlalchemy.url", settings.database_url.get_secret_value())
+    # Escape configparser interpolation ("%%" -> "%") so URL-encoded
+    # credentials such as %40 in passwords survive set_main_option.
+    config.set_main_option(
+        "sqlalchemy.url", settings.database_url.get_secret_value().replace("%", "%%")
+    )
 target_metadata = Base.metadata
+
+
+def include_object(object_, name, type_, reflected, compare_to):
+    """Keep Supabase-owned auth metadata out of application autogeneration."""
+
+    if type_ == "table" and object_.info.get("external"):
+        return False
+    if type_ == "table" and object_.schema == "auth":
+        return False
+    if type_ == "column" and object_.table.schema == "auth":
+        return False
+    return True
 
 
 def run_migrations_offline() -> None:
@@ -26,6 +43,8 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=include_object,
+        version_table_schema="public",
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -41,8 +60,21 @@ def run_migrations_online() -> None:
         future=True,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            include_object=include_object,
+            version_table_schema="public",
+        )
         with context.begin_transaction():
+            # Revisions 0002/0003 contain some unqualified PostgreSQL DDL.
+            # Pin its resolution for this transaction and fail closed if the
+            # intended schema is not the effective first schema.
+            connection.exec_driver_sql("SET LOCAL search_path TO public, pg_catalog")
+            current_schema = connection.exec_driver_sql("SELECT current_schema()").scalar_one()
+            if current_schema != "public":
+                raise RuntimeError("Alembic migrations must target the public schema")
             context.run_migrations()
     connectable.dispose()
 

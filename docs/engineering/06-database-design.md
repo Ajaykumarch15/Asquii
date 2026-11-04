@@ -1,6 +1,6 @@
-# 06 — Finalized database design (proposal)
+# 06 — MVP database design and Sprint 2 implementation
 
-No schema exists yet. This design applies [14](14-architecture-decisions.md). UUIDs identify external rows. Supabase Auth owns credentials. UTC event timestamps use `timestamptz`; dates use `date`. No PostgreSQL extensions are required: lowercase/trim invitation email in application code and store as text.
+The MVP schema defined here is implemented by SQLAlchemy models in `backend/app/models/`, Alembic revision `0002_mvp_schema`, and trigger correction revision `0003_lifecycle_hardening`. The database retains this document's decisions. UUIDs identify rows. Supabase Auth owns credentials. UTC event timestamps use `timestamptz`; dates use `date`. No PostgreSQL extensions are required; invitation email is normalized in application code and checked as lowercase/trimmed text.
 
 Mutable tables use `created_at` and `updated_at` UTC defaults; append-only activity has `created_at` only.
 
@@ -34,12 +34,26 @@ Enable RLS on every application tenant table, default deny. Active workspace mem
 
 Avoid recursive RLS predicates; narrowly scoped helper functions may be used only with fixed search path, minimized grants, and reviewed ownership. FastAPI authorization is still required. Direct SQLAlchemy identity propagation and staging verification are specified in [08](08-authentication-authorization.md).
 
+## Sprint 2 implementation details
+
+The schema contains the 15 non-conditional MVP tables listed above. `auth.users` remains a Supabase-managed external table; the ORM metadata includes only a lightweight reference so Alembic can resolve the profile foreign key, and autogeneration filters that external table. No notifications, binary storage, or product API tables outside this approved list were added.
+
+Role/status/type values use named `CHECK` constraints rather than PostgreSQL enum types. `task_assignees` is not a separate table: the approved `tasks.assignee_user_id` nullable column references the matching `(workspace_id, project_id, user_id)` project-member key. Subtasks use the approved `task_subtasks` table and task FK; recursive parent-task hierarchies are not added. Meetings use `starts_at` plus positive `duration_minutes`; no unapproved location, link, or separate end-time columns were introduced.
+
+The active-owner partial unique index enforces **at most one** active Owner. Deferred constraint triggers check **at least one** Owner at transaction end for each non-archived workspace. Revision `0003_lifecycle_hardening` explicitly gathers old and new workspace IDs, sorts them, locks them, then validates each surviving workspace. Project Manager correction does the same for both old and new project IDs and checks workspace-member changes against both old and new membership identities. These trigger changes have not been exercised against PostgreSQL; no concurrency-safety claim is made until the concurrency integration tests pass under the deployed isolation level.
+
+Composite FKs bind projects to workspaces; project members to projects and workspace members; tasks, comments, meetings, attendees, and resources to their matching project/workspace; and assignees, comment authors, attendees, and resource owners to project-member keys. Membership activity (`removed_at`) and authorization decisions still require service/RLS checks; referential integrity alone does not establish authorization.
+
+The migration adds an `activity_logs` trigger that rejects `UPDATE` and `DELETE`. The migration does not know or alter deployment-specific database role grants and does not constrain who may `INSERT`. Before production, the ordinary application role must have no update/delete rights, RLS policies must be reviewed, and trusted event creation must be limited to approved backend operations. The trigger is an immutability guard, not proof of a complete privilege boundary.
+
+No staging database was available for runtime migration or constraint testing. Static metadata tests and offline Alembic SQL generation are recorded in [16](16-sprint-2-implementation-report.md); they do not replace execution against a disposable PostgreSQL/Supabase staging database.
+
 
 ## Enforced lifecycle and manager invariants (clarifications)
 
-The workspace partial unique index only enforces **at most one** active Owner. For each non-archived workspace, enforce **exactly one** Owner at commit using the partial unique index plus a deferred constraint trigger (or equivalent final-state database constraint). Lock the parent workspace row for Owner transitions. Creation inserts workspace + Owner in one transaction. A controlled ownership-transfer operation locks workspace, verifies active successor membership, promotes successor, demotes predecessor, and commits atomically. Ordinary application writes cannot remove/demote the only Owner. Concurrent transfer and owner-removal tests are mandatory.
+The workspace partial unique index only enforces **at most one** active Owner. The deferred constraint trigger checks for **at least one** Owner at transaction end. A controlled ownership-transfer operation must lock all affected workspace rows in UUID order, verify an active successor, promote successor, demote predecessor, and commit atomically. Ordinary application writes cannot remove/demote the only Owner. The PostgreSQL concurrency tests are present but were skipped because no disposable database was available; race behavior remains unverified.
 
-Every non-archived project must have at least one active Project Manager. Project create atomically adds its creator as Project Manager. Project manager demotion/removal must add a replacement manager in the same transaction; otherwise reject. Lock the project row and use a deferred final-state constraint trigger (or equivalent). Archived projects are exempt; restore requires a manager before commit. Composite FK continues to require each manager to be an active workspace member. Current UI allows an empty person selection, so integration must make creator-manager assignment explicit.
+Every non-archived project must have at least one active Project Manager. Project create atomically adds its creator as Project Manager. Project manager demotion/removal must add a replacement manager in the same transaction; otherwise reject. Revision `0003` uses deferred final-state checks and sorted project-row locks. Archived projects are exempt; restore requires a manager before commit. The PostgreSQL race behavior remains unverified pending the integration suite. Current UI allows an empty person selection, so integration must make creator-manager assignment explicit.
 
 ### Workspace archive behavior
 

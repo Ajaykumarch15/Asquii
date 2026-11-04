@@ -1,6 +1,6 @@
 # 14 — Architecture decision records
 
-Status: Sprint 0.5 decisions for MVP architecture; implementation remains future work. Deployment and operational facts remain UNKNOWN.
+Status: Sprint 0.5 decisions for MVP architecture. Sprint 2 implements the approved relational schema in SQLAlchemy and Alembic. Sprint 3 adds access-token authentication, current-profile provisioning, and reusable authorization foundations; domain APIs, RLS policy deployment, and provider-specific operational facts remain future work or UNKNOWN. See [16](16-sprint-2-implementation-report.md) and [17](17-sprint-3-implementation-report.md) for implementation and verification status.
 
 ## ADR-001 — Modular monolith
 

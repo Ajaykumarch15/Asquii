@@ -25,8 +25,18 @@ class Settings(BaseSettings):
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
     database_url: SecretStr | None = None
+    database_pool_size: int = Field(default=3, ge=1, le=20)
+    database_max_overflow: int = Field(default=2, ge=0, le=20)
+    database_pool_timeout: int = Field(default=5, ge=1, le=60)
+    database_connect_timeout: int = Field(default=5, ge=1, le=60)
     supabase_url: str | None = None
     supabase_anon_key: SecretStr | None = None
+    supabase_jwt_issuer: str | None = None
+    supabase_jwt_audience: str = "authenticated"
+    supabase_jwks_url: str | None = None
+    supabase_jwt_signing_method: Literal["jwks", "hs256"] = "jwks"
+    supabase_jwt_secret: SecretStr | None = None
+    supabase_jwt_jwks_cache_seconds: int = Field(default=300, ge=30, le=3600)
     cors_origins: list[str] = Field(default_factory=list)
     log_level: str = "INFO"
 
@@ -48,6 +58,15 @@ class Settings(BaseSettings):
     def validate_supabase_url(cls, value: str | None) -> str | None:
         if value is not None and urlsplit(value).scheme not in {"http", "https"}:
             raise ValueError("SUPABASE_URL must be an HTTP(S) URL")
+        return value
+
+    @field_validator("supabase_jwks_url")
+    @classmethod
+    def validate_jwks_url(cls, value: str | None) -> str | None:
+        if value is not None:
+            parsed = urlsplit(value)
+            if parsed.scheme != "https" or not parsed.hostname:
+                raise ValueError("SUPABASE_JWKS_URL must be an HTTPS URL")
         return value
 
     @field_validator("cors_origins", mode="before")
@@ -86,6 +105,11 @@ class Settings(BaseSettings):
                 missing.append("CORS_ORIGINS")
             if missing:
                 raise ValueError("Missing required deployment settings: " + ", ".join(missing))
+        if self.supabase_jwt_signing_method == "hs256" and self.supabase_jwt_secret is None:
+            raise ValueError("SUPABASE_JWT_SECRET is required for HS256 signing")
+        if self.supabase_jwks_url and self.supabase_url:
+            if urlsplit(self.supabase_jwks_url).hostname != urlsplit(self.supabase_url).hostname:
+                raise ValueError("SUPABASE_JWKS_URL must use the configured Supabase host")
         return self
 
 

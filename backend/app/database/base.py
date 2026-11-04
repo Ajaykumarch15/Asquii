@@ -13,6 +13,6 @@ NAMING_CONVENTION = {
 
 
 class Base(DeclarativeBase):
-    """Base for future application models; no product models in Sprint 1."""
+    """Declarative base for models imported by the Alembic metadata registry."""
 
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
