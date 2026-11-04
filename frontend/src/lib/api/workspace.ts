@@ -5,7 +5,7 @@
  * and decides roles — the client never submits either.
  */
 
-import { apiGet, apiPost } from "./client";
+import { apiGet, apiPost, apiPatch } from "./client";
 
 export type ApiWorkspace = {
   id: string;
@@ -18,9 +18,33 @@ export type ApiWorkspace = {
 
 export type WorkspaceList = ApiWorkspace[];
 
+export type ApiWorkspaceMember = {
+  user_id: string;
+  display_name: string;
+  job_title: string | null;
+  role: string;
+  created_at: string;
+};
+
+export type ApiInvitation = {
+  id: string;
+  workspace_id: string;
+  email: string;
+  role: string;
+  invited_by_user_id: string;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  status: "pending" | "expired" | "accepted" | "revoked";
+};
+
 export interface WorkspaceApi {
   listWorkspaces(accessToken: string): Promise<WorkspaceList>;
   createWorkspace(accessToken: string, name: string): Promise<ApiWorkspace>;
+  renameWorkspace(accessToken: string, workspaceId: string, name: string): Promise<ApiWorkspace>;
+  listMembers(accessToken: string, workspaceId: string): Promise<ApiWorkspaceMember[]>;
+  listInvitations(accessToken: string, workspaceId: string): Promise<ApiInvitation[]>;
 }
 
 export const workspaceApi: WorkspaceApi = {
@@ -30,5 +54,14 @@ export const workspaceApi: WorkspaceApi = {
   },
   async createWorkspace(accessToken: string, name: string) {
     return apiPost<ApiWorkspace>("/workspaces", { name }, accessToken);
+  },
+  async renameWorkspace(accessToken: string, workspaceId: string, name: string) {
+    return apiPatch<ApiWorkspace>(`/workspaces/${workspaceId}`, { name }, accessToken);
+  },
+  async listMembers(accessToken: string, workspaceId: string) {
+    return apiGet<ApiWorkspaceMember[]>(`/workspaces/${workspaceId}/members`, accessToken);
+  },
+  async listInvitations(accessToken: string, workspaceId: string) {
+    return apiGet<ApiInvitation[]>(`/workspaces/${workspaceId}/invitations`, accessToken);
   },
 };

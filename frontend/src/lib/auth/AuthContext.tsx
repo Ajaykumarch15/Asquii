@@ -9,7 +9,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { apiGet, friendlyError } from "../api/client";
+import { apiFetch, friendlyError } from "../api/client";
 import { getSupabaseClient } from "./client";
 
 export type AuthIdentity = {
@@ -53,8 +53,9 @@ export function useAuthActions(): AuthActions {
 
 async function fetchIdentity(accessToken: string): Promise<AuthIdentity> {
   // The backend derives identity from the JWT and upserts a missing profile;
-  // it never trusts client-submitted identity or roles.
-  const me = await apiGet<MeResponse>("/auth/me", accessToken);
+  // it never trusts client-submitted identity or roles. The generous timeout
+  // covers cold backend starts that verify the JWT against a remote JWKS.
+  const me = await apiFetch<MeResponse>("/auth/me", { method: "GET", accessToken, timeoutMs: 30000 });
   return { userId: me.user_id, email: me.email, displayName: me.display_name, jobTitle: me.job_title };
 }
 
