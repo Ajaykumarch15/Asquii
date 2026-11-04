@@ -21,6 +21,9 @@ type Props = {
   notifications: NotificationItem[];
   onSelectWorkspace: (id: string) => void; onSelectProject: (id: string) => void; onSelectPersona: (id: string) => void; onCreateWorkspace: () => void;
   onOpenProjectPage: (projectId: string, page: string) => void; onReadNotification: (id: string) => void; onMarkAllNotificationsRead: () => void; recentProjectIds: string[]; onCreateProject?: () => void; onCreateTask?: () => void; onCreateMeeting?: () => void; onCreateResource?: () => void; onQuickCreate?: () => void; theme: "light" | "dark"; onToggleTheme: () => void; children: React.ReactNode;
+  /** Real session account; null means unauthenticated prototype demo mode. */
+  account?: { name: string; email: string | null } | null;
+  onShowSignIn: () => void; onSignOut: () => void;
 };
 
 const workspaceItems = [{ label: "Overview", icon: LayoutDashboard }, { label: "Projects", icon: FolderKanban }, { label: "People", icon: Users }];
@@ -29,7 +32,7 @@ type PaletteResult = { key: string; type: "Project" | "Task" | "Person" | "Actio
 
 const paletteIcon = (result: PaletteResult) => result.icon ?? (result.type === "Project" ? <FolderKanban size={14} /> : result.type === "Task" ? <ListTodo size={14} /> : result.type === "Person" ? <UserRound size={14} /> : <CornerDownLeft size={14} />);
 
-export function AppShell({ scope, active, onNavigate, workspace, workspaces, projects, project, tasks, people, personaId, role, canAdmin, notifications, onSelectWorkspace, onSelectProject, onSelectPersona, onCreateWorkspace, onOpenProjectPage, onReadNotification, onMarkAllNotificationsRead, recentProjectIds, onCreateProject, onCreateTask, onCreateMeeting, onCreateResource, onQuickCreate, theme, onToggleTheme, children }: Props) {
+export function AppShell({ scope, active, onNavigate, workspace, workspaces, projects, project, tasks, people, personaId, role, canAdmin, notifications, onSelectWorkspace, onSelectProject, onSelectPersona, onCreateWorkspace, onOpenProjectPage, onReadNotification, onMarkAllNotificationsRead, recentProjectIds, onCreateProject, onCreateTask, onCreateMeeting, onCreateResource, onQuickCreate, theme, onToggleTheme, account, onShowSignIn, onSignOut, children }: Props) {
   const unreadCount = notifications.filter(item => !item.read).length;
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -86,11 +89,11 @@ export function AppShell({ scope, active, onNavigate, workspace, workspaces, pro
     } else {
       results.push(...recents);
       results.push(...workspaces.filter(item => item.id !== workspace.id).map(item => ({ key: `workspace-${item.id}`, type: "Action" as const, id: item.id, name: `Open workspace: ${item.name}`, sub: "Switch workspace", run: () => chooseWorkspace(item.id), icon: <BriefcaseBusiness size={14} /> })));
-      results.push(...people.filter(item => item.id !== personaId).map(item => ({ key: `persona-${item.id}`, type: "Action" as const, id: item.id, name: `Preview as ${item.name}`, sub: item.role, run: () => { onSelectPersona(item.id); setPersonaOpen(false); }, icon: <UserRound size={14} /> })));
+      results.push(...people.filter(item => item.id !== personaId && !account).map(item => ({ key: `persona-${item.id}`, type: "Action" as const, id: item.id, name: `Preview as ${item.name}`, sub: item.role, run: () => { onSelectPersona(item.id); setPersonaOpen(false); }, icon: <UserRound size={14} /> })));
     }
     const matched = query ? results.filter(item => `${item.name} ${item.sub}`.toLowerCase().includes(query)) : results;
     return matched.sort((a, b) => score(`${a.type} ${a.name} ${a.sub}`) - score(`${b.type} ${b.name} ${b.sub}`)).slice(0, 10);
-  }, [paletteQuery, projects, tasks, people, workspaces, workspace, scope, canAdmin, project?.id, theme, recentProjectIds, personaId, onToggleTheme, onCreateProject, onCreateTask, onCreateMeeting, onCreateResource, onSelectPersona]);
+  }, [paletteQuery, projects, tasks, people, workspaces, workspace, scope, canAdmin, project?.id, theme, recentProjectIds, personaId, onToggleTheme, onCreateProject, onCreateTask, onCreateMeeting, onCreateResource, onSelectPersona, account]);
 
   const runPaletteResult = (result: PaletteResult) => {
     setPaletteOpen(false); setPaletteQuery(""); setPaletteIndex(0); setMobileOpen(false);
@@ -103,7 +106,7 @@ export function AppShell({ scope, active, onNavigate, workspace, workspaces, pro
   };
 
   return <div className="min-h-screen bg-page text-heading">
-    <Header scope={scope} active={active} workspace={workspace} workspaces={workspaces} projects={projects} project={project} setMobileOpen={setMobileOpen} switcherOpen={switcherOpen} setSwitcherOpen={setSwitcherOpen} setPaletteOpen={setPaletteOpen} unreadCount={unreadCount} bellOpen={bellOpen} setBellOpen={setBellOpen} notifications={notifications} onMarkAllNotificationsRead={onMarkAllNotificationsRead} onReadNotification={onReadNotification} navigate={navigate} onOpenProjectPage={onOpenProjectPage} theme={theme} onToggleTheme={onToggleTheme} onQuickCreate={onQuickCreate} currentPerson={currentPerson} personaOpen={personaOpen} setPersonaOpen={setPersonaOpen} people={people} role={role} personaId={personaId} onSelectPersona={onSelectPersona} chooseWorkspace={chooseWorkspace} chooseProject={chooseProject} onCreateWorkspace={onCreateWorkspace} />
+    <Header scope={scope} active={active} workspace={workspace} workspaces={workspaces} projects={projects} project={project} setMobileOpen={setMobileOpen} switcherOpen={switcherOpen} setSwitcherOpen={setSwitcherOpen} setPaletteOpen={setPaletteOpen} unreadCount={unreadCount} bellOpen={bellOpen} setBellOpen={setBellOpen} notifications={notifications} onMarkAllNotificationsRead={onMarkAllNotificationsRead} onReadNotification={onReadNotification} navigate={navigate} onOpenProjectPage={onOpenProjectPage} theme={theme} onToggleTheme={onToggleTheme} onQuickCreate={onQuickCreate} currentPerson={currentPerson} personaOpen={personaOpen} setPersonaOpen={setPersonaOpen} people={people} role={role} personaId={personaId} onSelectPersona={onSelectPersona} chooseWorkspace={chooseWorkspace} chooseProject={chooseProject} onCreateWorkspace={onCreateWorkspace} account={account} onShowSignIn={onShowSignIn} onSignOut={onSignOut} />
     {mobileOpen && <button className="fixed inset-0 z-40 bg-overlay md:hidden" aria-label="Close navigation overlay" onClick={() => setMobileOpen(false)} />}
     <Sidebar scope={scope} active={active} workspace={workspace} workspaces={workspaces} projects={projects} project={project} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} collapsed={collapsed} setCollapsed={setCollapsed} canAdmin={canAdmin} onNavigate={onNavigate} onSelectWorkspace={onSelectWorkspace} onSelectProject={onSelectProject} onCreateWorkspace={onCreateWorkspace} />
     <main className={`min-h-screen pt-14 transition-[padding] duration-200 ${collapsed ? "md:pl-14" : "md:pl-[220px]"}`}><div className="mobile-content mx-auto max-w-[1600px] p-5 md:p-8">

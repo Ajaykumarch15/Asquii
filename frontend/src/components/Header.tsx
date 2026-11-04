@@ -11,13 +11,14 @@ type HeaderProps = {
   onOpenProjectPage: (projectId: string, page: string) => void; theme: "light" | "dark"; onToggleTheme: () => void; onQuickCreate?: () => void;
   currentPerson?: Person; personaOpen: boolean; setPersonaOpen: Dispatch<SetStateAction<boolean>>; people: Person[]; role: WorkspaceRole; personaId: string; onSelectPersona: (id: string) => void;
   chooseWorkspace: (id: string) => void; chooseProject: (id: string) => void; onCreateWorkspace: () => void;
+  account?: { name: string; email: string | null } | null; onShowSignIn: () => void; onSignOut: () => void;
 };
 
 const notificationTones = { danger: "bg-danger-soft text-danger", warning: "bg-warning-soft text-warning", brand: "bg-brand-soft text-brand", neutral: "bg-hover text-secondary" } as const;
 function notificationIcon(kind: NotificationItem["kind"]) { return kind === "task" ? <ListTodo size={14} /> : kind === "invite" ? <BriefcaseBusiness size={14} /> : kind === "meeting" ? <Video size={14} /> : kind === "milestone" ? <CalendarDays size={14} /> : <FolderOpen size={14} />; }
 const notificationPages: Record<Exclude<NotificationItem["kind"], "invite">, string> = { task: "Tasks", meeting: "Meetings", milestone: "Overview", resource: "Resources" };
 
-export function Header({ scope, active, workspace, workspaces, projects, project, setMobileOpen, switcherOpen, setSwitcherOpen, setPaletteOpen, unreadCount, bellOpen, setBellOpen, notifications, onMarkAllNotificationsRead, onReadNotification, navigate, onOpenProjectPage, theme, onToggleTheme, onQuickCreate, currentPerson, personaOpen, setPersonaOpen, people, role, personaId, onSelectPersona, chooseWorkspace, chooseProject, onCreateWorkspace }: HeaderProps) {
+export function Header({ scope, active, workspace, workspaces, projects, project, setMobileOpen, switcherOpen, setSwitcherOpen, setPaletteOpen, unreadCount, bellOpen, setBellOpen, notifications, onMarkAllNotificationsRead, onReadNotification, navigate, onOpenProjectPage, theme, onToggleTheme, onQuickCreate, currentPerson, personaOpen, setPersonaOpen, people, role, personaId, onSelectPersona, chooseWorkspace, chooseProject, onCreateWorkspace, account, onShowSignIn, onSignOut }: HeaderProps) {
   return (
     <header className="fixed inset-x-0 top-0 z-40 flex h-14 items-center justify-between border-b border-line bg-surface px-3 sm:px-4 md:px-5">
       <div className="flex min-w-0 items-center gap-3">
@@ -49,9 +50,25 @@ export function Header({ scope, active, workspace, workspaces, projects, project
         </div>
         <button className="icon-button" aria-label={`Switch to ${theme === "light" ? "dark" : "light"} theme`} aria-pressed={theme === "dark"} onClick={onToggleTheme}>{theme === "light" ? <Moon size={17} /> : <Sun size={17} />}</button>
         {onQuickCreate && <button className="icon-button hidden sm:grid" aria-label="Quick create" onClick={onQuickCreate}><Plus size={18} /></button>}
-        <div className="relative"><button className="grid h-8 w-8 place-items-center rounded-full bg-brand-soft text-xs font-semibold text-brand" aria-label="Switch preview persona" aria-expanded={personaOpen} onClick={() => setPersonaOpen(value => !value)}>{currentPerson?.name.split(" ").map(part => part[0]).join("") ?? "A"}</button>
-          {personaOpen && <div className="absolute right-0 top-10 z-50 w-64 rounded-xl border border-line bg-surface p-2 shadow-lg"><div className="border-b border-line px-3 pb-2 pt-1"><p className="text-xs font-semibold">Preview as</p><p className="mt-1 text-[10px] text-muted">Local prototype persona · {role}</p></div>{people.map(person => <button key={person.id} className={`menu-row flex items-center gap-2.5 ${person.id === personaId ? "bg-brand-soft text-brand-pressed" : ""}`} onClick={() => { onSelectPersona(person.id); setPersonaOpen(false); }}><span className="grid h-7 w-7 place-items-center rounded-full bg-hover text-[10px] font-semibold">{person.name.split(" ").map(part => part[0]).join("")}</span><span className="min-w-0 flex-1"><span className="block truncate">{person.name}</span><span className="block truncate text-[10px] text-muted">{person.role}</span></span></button>)}</div>}
-        </div>
+        {account
+          ? <div className="relative">
+            <button className="grid h-8 w-8 place-items-center rounded-full bg-brand-soft text-xs font-semibold text-brand" aria-label={`Account, signed in as ${account.name}`} aria-expanded={personaOpen} onClick={() => setPersonaOpen(value => !value)}>{account.name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase()}</button>
+            {personaOpen && <div className="absolute right-0 top-10 z-50 w-64 rounded-xl border border-line bg-surface p-2 shadow-lg">
+              <div className="border-b border-line px-3 pb-2 pt-1">
+                <p className="truncate text-xs font-semibold">{account.name}</p>
+                {account.email && <p className="mt-0.5 truncate text-[10px] text-muted">{account.email}</p>}
+                <p className="mt-1 text-[10px] text-muted">Signed in · project lists still show sample data until integration is complete</p>
+              </div>
+              <button className="menu-row flex w-full items-center gap-2.5 text-danger" onClick={() => { setPersonaOpen(false); onSignOut(); }}>Sign out</button>
+            </div>}
+          </div>
+          : <>
+            <button className="hidden rounded-lg border border-line px-2.5 py-1.5 text-xs font-semibold text-brand hover:border-brand hover:text-brand-pressed sm:block" onClick={onShowSignIn}>Sign in</button>
+            <button className="rounded-md px-2 py-1.5 text-xs font-semibold text-brand hover:text-brand-pressed sm:hidden" aria-label="Sign in" onClick={onShowSignIn}>Sign in</button>
+            <div className="relative"><button className="grid h-8 w-8 place-items-center rounded-full bg-brand-soft text-xs font-semibold text-brand" aria-label="Switch preview persona" aria-expanded={personaOpen} onClick={() => setPersonaOpen(value => !value)}>{currentPerson?.name.split(" ").map(part => part[0]).join("") ?? "A"}</button>
+              {personaOpen && <div className="absolute right-0 top-10 z-50 w-64 rounded-xl border border-line bg-surface p-2 shadow-lg"><div className="border-b border-line px-3 pb-2 pt-1"><p className="text-xs font-semibold">Preview as</p><p className="mt-1 text-[10px] text-muted">Local prototype persona · {role}</p></div>{people.map(person => <button key={person.id} className={`menu-row flex items-center gap-2.5 ${person.id === personaId ? "bg-brand-soft text-brand-pressed" : ""}`} onClick={() => { onSelectPersona(person.id); setPersonaOpen(false); }}><span className="grid h-7 w-7 place-items-center rounded-full bg-hover text-[10px] font-semibold">{person.name.split(" ").map(part => part[0]).join("")}</span><span className="min-w-0 flex-1"><span className="block truncate">{person.name}</span><span className="block truncate text-[10px] text-muted">{person.role}</span></span></button>)}</div>}
+            </div>
+          </>}
       </div>
     </header>
   );

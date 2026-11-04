@@ -33,6 +33,8 @@ type AuthActions = {
   signIn: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   signUp: (email: string, password: string) => Promise<{ ok: boolean; error?: string; needsConfirmation?: boolean }>;
   signOut: () => Promise<void>;
+  /** Current Supabase access token, refreshed by the SDK; null in demo mode. */
+  getAccessToken: () => Promise<string | null>;
   retry: () => void;
 };
 
@@ -123,6 +125,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signIn: async () => ({ ok: false, error: "Sign-in is not configured in this build." }),
         signUp: async () => ({ ok: false, error: "Sign-up is not configured in this build." }),
         signOut: async () => undefined,
+        getAccessToken: async () => null,
         retry: () => undefined,
       };
     }
@@ -147,6 +150,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       signOut: async () => {
         await client.auth.signOut();
+      },
+      getAccessToken: async () => {
+        const { data, error } = await client.auth.getSession();
+        if (error || !data.session) return null;
+        return data.session.access_token;
       },
       retry: () => {
         setEpoch(previous => previous + 1);

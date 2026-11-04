@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, X } from "lucide-react";
+import { AuthPanel } from "./components/AuthPanel";
 import { KanbanPage } from "./modules/projects/pages/KanbanPage";
 import { MeetingsPage } from "./modules/projects/pages/MeetingsPage";
 import { ProjectOverviewPage } from "./modules/projects/pages/OverviewPage";
@@ -16,9 +17,16 @@ import { AppShell, type NotificationItem, type Scope } from "./components/AppShe
 import { Button } from "./components/ui";
 import { ProjectEditor, TaskEditor, MeetingEditor, ResourceEditor, type EditorState } from "./modules/projects/components/ProjectEditors";
 import { createId, isPastMeeting, isRecentlyUpdated, milestoneState, sortMeetingsByDate, sortMilestones, type AppData, type Invitation, type Meeting, type Membership, type Project, type Resource, type Task, type TaskStatus, type Workspace, type WorkspaceRole, useAppData } from "./model";
+import { useAuthActions, useAuthState } from "./lib/auth/AuthContext";
 
 export default function App() {
   const { data, setData, storageError, clearStorageError } = useAppData();
+  const auth = useAuthState();
+  const authActions = useAuthActions();
+  const [authOpen, setAuthOpen] = useState(false);
+  const [workspaceNotice, setWorkspaceNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+
+  const account = auth.status === "authed" ? { name: auth.identity.displayName, email: auth.identity.email } : null;
   const [scope, setScope] = useState<Scope>("workspace");
   const [active, setActive] = useState("Overview");
   const [workspaceId, setWorkspaceId] = useState(() => readLocal("asquii.active-workspace", "workspace-product"));
@@ -222,7 +230,12 @@ export default function App() {
   const openEditResource = (resourceId: string) => setEditor({ kind: "resource", id: resourceId });
 
   const isPeoplePage = active === "People" || (scope === "project" && (active === "Resources" || active === "Meetings" || active === "Tasks" || active === "Kanban"));
-  return <AppShell scope={scope} active={active} onNavigate={navigate} workspace={workspace} workspaces={visibleWorkspaces} projects={visibleProjects} project={selectedProject} tasks={workspaceTasks} people={data.people} personaId={personaId} role={role} canAdmin={canAdmin} notifications={notifications} onSelectWorkspace={selectWorkspace} onSelectProject={selectProject} onSelectPersona={setPersonaId} onCreateWorkspace={() => setWorkspaceEditorOpen(true)} onOpenProjectPage={openProjectPage} onReadNotification={markNotificationRead} onMarkAllNotificationsRead={markAllNotificationsRead} recentProjectIds={recentIds} onCreateProject={canAdmin ? openCreateProject : undefined} onCreateTask={selectedProject ? () => openCreateTask() : undefined} onCreateMeeting={selectedProject ? openCreateMeeting : undefined} onCreateResource={selectedProject ? openCreateResource : undefined} onQuickCreate={openQuickCreate} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")}>
+  const handleSignOut = async () => {
+    await authActions.signOut();
+    setWorkspaceNotice(null);
+  };
+  return <>
+    <AppShell scope={scope} active={active} onNavigate={navigate} workspace={workspace} workspaces={visibleWorkspaces} projects={visibleProjects} project={selectedProject} tasks={workspaceTasks} people={data.people} personaId={personaId} role={role} canAdmin={canAdmin} notifications={notifications} onSelectWorkspace={selectWorkspace} onSelectProject={selectProject} onSelectPersona={setPersonaId} onCreateWorkspace={() => setWorkspaceEditorOpen(true)} onOpenProjectPage={openProjectPage} onReadNotification={markNotificationRead} onMarkAllNotificationsRead={markAllNotificationsRead} recentProjectIds={recentIds} onCreateProject={canAdmin ? openCreateProject : undefined} onCreateTask={selectedProject ? () => openCreateTask() : undefined} onCreateMeeting={selectedProject ? openCreateMeeting : undefined} onCreateResource={selectedProject ? openCreateResource : undefined} onQuickCreate={openQuickCreate} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} account={account} onShowSignIn={() => setAuthOpen(true)} onSignOut={() => void handleSignOut()}>
     {storageError && <div role="alert" className="ui-error-banner mb-5"><span className="flex-1">{storageError}</span><button className="icon-button -my-1 text-danger" aria-label="Dismiss message" onClick={clearStorageError}><X size={15} /></button></div>}
     {!isPeoplePage && active !== "Overview" && !(scope === "project" && active === "Settings") && !(scope === "workspace" && active === "Projects") && <div className="mb-5 flex flex-wrap items-end justify-between gap-3 sm:mb-6"><div><h1 className="mobile-page-title text-2xl font-semibold tracking-tight">{pageTitle}</h1><p className="mt-1.5 text-sm text-muted">{description(scope, active, role)}</p></div>{action && <Button variant="primary" icon={<Plus size={15} />} onClick={scope === "workspace" ? openCreateProject : () => openCreateTask()}>{action}</Button>}</div>}
     {scope === "workspace"
@@ -233,7 +246,9 @@ export default function App() {
     {editor?.kind === "meeting" && selectedProject && <MeetingEditor meeting={editor.id ? data.meetings.find(meeting => meeting.id === editor.id && meeting.projectId === selectedProject.id) : undefined} projectId={selectedProject.id} projects={[selectedProject]} people={projectPeople} onClose={() => setEditor(null)} onSave={saveMeeting} />}
     {editor?.kind === "resource" && selectedProject && <ResourceEditor resource={editor.id ? data.resources.find(resource => resource.id === editor.id && resource.projectId === selectedProject.id) : undefined} initialType={editor.type} projectId={selectedProject.id} people={projectPeople} onClose={() => setEditor(null)} onSave={saveResource} />}
     {workspaceEditorOpen && <WorkspaceEditor onClose={() => setWorkspaceEditorOpen(false)} onSave={createWorkspace} />}
-  </AppShell>;
+    </AppShell>
+    <AuthPanel open={authOpen} onClose={() => setAuthOpen(false)} />
+  </>;
 }
 
 function WorkspaceRoute({ active, data, workspace, memberships, invitations, canAdmin, role, personaId, onOpenProject, onEditProject, onCreateProject, onImportProjects, onSaveSettings, theme, onToggleTheme, onViewProjects, onViewPeople, onInvite, onRoleChange, onAcceptInvite, onRevokeInvite }: { active: string; data: AppData; workspace: Workspace; memberships: Membership[]; invitations: Invitation[]; canAdmin: boolean; role: WorkspaceRole; personaId: string; onOpenProject: (id: string) => void; onEditProject: (id: string) => void; onCreateProject: () => void; onImportProjects: (projects: ImportedProject[]) => void; onSaveSettings: (settings: Workspace) => void; theme: "light" | "dark"; onToggleTheme: () => void; onViewProjects: () => void; onViewPeople: () => void; onInvite: (email: string, role: WorkspaceRole) => boolean; onRoleChange: (personId: string, role: WorkspaceRole) => void; onAcceptInvite: (id: string) => void; onRevokeInvite: (id: string) => void }) {
