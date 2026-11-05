@@ -21,6 +21,7 @@ import { useAuthActions, useAuthState } from "./lib/auth/AuthContext";
 import { useRealWorkspaces } from "./lib/real/useRealWorkspaces";
 import { RealWorkspaceHome } from "./components/RealWorkspaceHome";
 import { RealProjectsPage } from "./components/RealProjectsPage";
+import { RealProjectDetailPage } from "./components/RealProjectDetailPage";
 import { workspaceApi, type ApiWorkspace } from "./lib/api/workspace";
 import { friendlyError } from "./lib/api/client";
 
@@ -61,6 +62,16 @@ export default function App() {
     } catch { return []; }
   });
   const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
+  const [realProjectId, setRealProjectId] = useState<string | null>(null);
+  // Real project detail is a transient drill-down: navigating anywhere else or
+  // switching workspace closes it, so returning to Projects shows the list.
+  useEffect(() => {
+    setRealProjectId(null);
+  }, [active]);
+  const realWorkspaceSelectedId = realWorkspaces.selected?.id;
+  useEffect(() => {
+    setRealProjectId(null);
+  }, [realWorkspaceSelectedId]);
   const [theme, setTheme] = useState<"light" | "dark">(readTheme);
 
   const membership = data.memberships.find(item => item.workspaceId === workspaceId && item.personId === personaId);
@@ -292,7 +303,9 @@ export default function App() {
     {signedIn ? <>
         {workspaceNotice && <div role="status" className={`mb-5 rounded-xl border border-line px-4 py-3 text-xs font-medium ${workspaceNotice.tone === "success" ? "bg-brand-soft text-brand" : "bg-danger-soft text-danger"}`}>{workspaceNotice.text}</div>}
         {active === "Projects"
-          ? <RealProjectsPage workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} />
+          ? (realProjectId
+            ? <RealProjectDetailPage workspaceState={realWorkspaces} projectId={realProjectId} getAccessToken={authActions.getAccessToken} onBack={() => setRealProjectId(null)} />
+            : <RealProjectsPage workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} onOpenProject={setRealProjectId} />)
           : <RealWorkspaceHome workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} />}
       </>
       : <>

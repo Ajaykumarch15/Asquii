@@ -20,9 +20,10 @@ function shortDate(value: string): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString("en", { month: "short", day: "numeric" });
 }
 
-export function RealProjectsPage({ workspaceState, getAccessToken }: {
+export function RealProjectsPage({ workspaceState, getAccessToken, onOpenProject }: {
   workspaceState: WorkspaceState;
   getAccessToken: () => Promise<string | null>;
+  onOpenProject: (projectId: string) => void;
 }) {
   const workspace = workspaceState.selected;
   const isAdmin = workspace?.role === "Owner" || workspace?.role === "Admin";
@@ -138,6 +139,7 @@ export function RealProjectsPage({ workspaceState, getAccessToken }: {
         <ul className="grid gap-2 lg:grid-cols-2">
           {projects.map(project => (
             <li key={project.id} className="flex items-start gap-3 rounded-xl border border-line bg-surface p-4">
+              <button type="button" className="flex flex-1 items-start gap-3 rounded-xl text-left focus:outline-none" aria-label={`Open project ${project.name}`} onClick={() => onOpenProject(project.id)}>
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-brand-soft text-brand"><FolderKanban size={16} /></span>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
@@ -152,6 +154,7 @@ export function RealProjectsPage({ workspaceState, getAccessToken }: {
                   {project.progress_mode === "manual" && project.manual_progress !== null && <span>{project.manual_progress}% manual</span>}
                 </p>
               </div>
+              </button>
             </li>
           ))}
         </ul>

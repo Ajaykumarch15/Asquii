@@ -139,3 +139,7 @@ export function apiPost<T>(path: string, body: unknown, accessToken?: string): P
 export function apiPatch<T>(path: string, body: unknown, accessToken?: string): Promise<T> {
   return apiFetch<T>(path, { method: "PATCH", body, accessToken });
 }
+
+export async function apiDelete(path: string, accessToken?: string): Promise<void> {
+  await apiFetch(path, { method: "DELETE", accessToken });
+}
