@@ -13,11 +13,19 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 settings = get_settings()
-if settings.database_url is not None:
+# Migrations may run under a dedicated admin URL (DATABASE_MIGRATE_URL) so the
+# runtime connection (DATABASE_URL, the least-privilege asquii_app role) never
+# needs DDL rights. Fall back to the runtime URL when the migrate URL is unset.
+migrate_url = (
+    settings.database_migrate_url
+    if settings.database_migrate_url is not None
+    else settings.database_url
+)
+if migrate_url is not None:
     # Escape configparser interpolation ("%%" -> "%") so URL-encoded
     # credentials such as %40 in passwords survive set_main_option.
     config.set_main_option(
-        "sqlalchemy.url", settings.database_url.get_secret_value().replace("%", "%%")
+        "sqlalchemy.url", migrate_url.get_secret_value().replace("%", "%%")
     )
 target_metadata = Base.metadata
 

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
     database_url: SecretStr | None = None
+    database_migrate_url: SecretStr | None = None
     database_pool_size: int = Field(default=3, ge=1, le=20)
     database_max_overflow: int = Field(default=2, ge=0, le=20)
     database_pool_timeout: int = Field(default=5, ge=1, le=60)
@@ -43,12 +44,21 @@ class Settings(BaseSettings):
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, value: SecretStr | None) -> SecretStr | None:
+        return cls._normalize_postgres_url(value, "DATABASE_URL")
+
+    @field_validator("database_migrate_url")
+    @classmethod
+    def validate_database_migrate_url(cls, value: SecretStr | None) -> SecretStr | None:
+        return cls._normalize_postgres_url(value, "DATABASE_MIGRATE_URL")
+
+    @staticmethod
+    def _normalize_postgres_url(value: SecretStr | None, setting: str) -> SecretStr | None:
         if value is None:
             return value
         url = value.get_secret_value()
         parsed = urlsplit(url)
         if parsed.scheme not in {"postgresql", "postgresql+psycopg"} or not parsed.hostname:
-            raise ValueError("DATABASE_URL must be a PostgreSQL URL using psycopg")
+            raise ValueError(f"{setting} must be a PostgreSQL URL using psycopg")
         if parsed.scheme == "postgresql":
             value = SecretStr(url.replace("postgresql://", "postgresql+psycopg://", 1))
         return value
