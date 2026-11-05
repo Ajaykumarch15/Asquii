@@ -5,7 +5,7 @@
  * and decides roles — the client never submits either.
  */
 
-import { apiGet, apiPost, apiPatch } from "./client";
+import { apiDelete, apiGet, apiPost, apiPatch } from "./client";
 
 export type ApiWorkspace = {
   id: string;
@@ -45,6 +45,9 @@ export interface WorkspaceApi {
   renameWorkspace(accessToken: string, workspaceId: string, name: string): Promise<ApiWorkspace>;
   listMembers(accessToken: string, workspaceId: string): Promise<ApiWorkspaceMember[]>;
   listInvitations(accessToken: string, workspaceId: string): Promise<ApiInvitation[]>;
+  createInvitation(accessToken: string, workspaceId: string, input: { email: string; role: "Admin" | "Member" }): Promise<ApiInvitation & { token: string }>;
+  revokeInvitation(accessToken: string, workspaceId: string, invitationId: string): Promise<void>;
+  acceptInvitation(accessToken: string, token: string): Promise<{ workspace_id: string; role: string }>;
 }
 
 export const workspaceApi: WorkspaceApi = {
@@ -63,5 +66,14 @@ export const workspaceApi: WorkspaceApi = {
   },
   async listInvitations(accessToken: string, workspaceId: string) {
     return apiGet<ApiInvitation[]>(`/workspaces/${workspaceId}/invitations`, accessToken);
+  },
+  async createInvitation(accessToken: string, workspaceId: string, input) {
+    return apiPost<ApiInvitation & { token: string }>(`/workspaces/${workspaceId}/invitations`, input, accessToken);
+  },
+  async revokeInvitation(accessToken: string, workspaceId: string, invitationId: string) {
+    return apiDelete(`/workspaces/${workspaceId}/invitations/${invitationId}`, accessToken);
+  },
+  async acceptInvitation(accessToken: string, token: string) {
+    return apiPost<{ workspace_id: string; role: string }>("/invitations/accept", { token }, accessToken);
   },
 };

@@ -68,14 +68,26 @@ function kindForStatus(status: number): ApiError["requestKind"] {
   }
 }
 
-/** Extract a single readable message from a FastAPI/Pydantic error body. */
+/** Extract a single readable message from the API's error body.
+ *
+ * The backend's exception middleware (backend/app/core/exceptions.py) returns
+ * {"error": {"code", "message"}, "request_id"} for expected failures; keep the
+ * FastAPI-native {"detail"} fallback for anything that bypasses it.
+ */
 function detailToMessage(status: number, body: unknown): string {
-  if (typeof body === "object" && body !== null && "detail" in body) {
-    const detail = (body as { detail: unknown }).detail;
-    if (typeof detail === "string") return detail;
-    if (Array.isArray(detail)) {
-      const first = detail[0] as { msg?: string; loc?: unknown[] } | undefined;
-      if (first?.msg) return first.msg;
+  if (typeof body === "object" && body !== null) {
+    const record = body as Record<string, unknown>;
+    if (typeof record.error === "object" && record.error !== null) {
+      const nested = record.error as { message?: unknown };
+      if (typeof nested.message === "string" && nested.message) return nested.message;
+    }
+    if ("detail" in record) {
+      const detail = (body as { detail: unknown }).detail;
+      if (typeof detail === "string") return detail;
+      if (Array.isArray(detail)) {
+        const first = detail[0] as { msg?: string; loc?: unknown[] } | undefined;
+        if (first?.msg) return first.msg;
+      }
     }
   }
   return status >= 500 ? "Unexpected service error" : "Request rejected";
