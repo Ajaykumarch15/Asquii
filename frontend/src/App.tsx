@@ -20,6 +20,7 @@ import { createId, isPastMeeting, isRecentlyUpdated, milestoneState, sortMeeting
 import { useAuthActions, useAuthState } from "./lib/auth/AuthContext";
 import { useRealWorkspaces } from "./lib/real/useRealWorkspaces";
 import { RealWorkspaceHome } from "./components/RealWorkspaceHome";
+import { RealProjectsPage } from "./components/RealProjectsPage";
 import { workspaceApi, type ApiWorkspace } from "./lib/api/workspace";
 import { friendlyError } from "./lib/api/client";
 
@@ -280,7 +281,7 @@ export default function App() {
     setWorkspaceNotice(null);
   };
   return <>
-    <AppShell scope={signedIn ? "workspace" : scope} active={signedIn ? "Overview" : active} onNavigate={navigate} workspace={displayWorkspace} workspaces={displayWorkspaces} projects={displayProjects} project={displaySelectedProject} tasks={workspaceTasks} people={data.people} personaId={personaId} role={displayRole} canAdmin={displayCanAdmin} notifications={notifications} onSelectWorkspace={selectWorkspace} onSelectProject={selectProject} onSelectPersona={setPersonaId} onCreateWorkspace={() => setWorkspaceEditorOpen(true)} onOpenProjectPage={openProjectPage} onReadNotification={markNotificationRead} onMarkAllNotificationsRead={markAllNotificationsRead} recentProjectIds={recentIds} onCreateProject={!signedIn && displayCanAdmin ? openCreateProject : undefined} onCreateTask={!signedIn && selectedProject ? () => openCreateTask() : undefined} onCreateMeeting={!signedIn && selectedProject ? openCreateMeeting : undefined} onCreateResource={!signedIn && selectedProject ? openCreateResource : undefined} onQuickCreate={!signedIn ? openQuickCreate : undefined} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} account={account} onShowSignIn={() => setAuthOpen(true)} onSignOut={() => void handleSignOut()}>
+    <AppShell scope={signedIn ? "workspace" : scope} active={signedIn && active !== "Projects" ? "Overview" : active} onNavigate={navigate} workspace={displayWorkspace} workspaces={displayWorkspaces} projects={displayProjects} project={displaySelectedProject} tasks={workspaceTasks} people={data.people} personaId={personaId} role={displayRole} canAdmin={displayCanAdmin} notifications={notifications} onSelectWorkspace={selectWorkspace} onSelectProject={selectProject} onSelectPersona={setPersonaId} onCreateWorkspace={() => setWorkspaceEditorOpen(true)} onOpenProjectPage={openProjectPage} onReadNotification={markNotificationRead} onMarkAllNotificationsRead={markAllNotificationsRead} recentProjectIds={recentIds} onCreateProject={!signedIn && displayCanAdmin ? openCreateProject : undefined} onCreateTask={!signedIn && selectedProject ? () => openCreateTask() : undefined} onCreateMeeting={!signedIn && selectedProject ? openCreateMeeting : undefined} onCreateResource={!signedIn && selectedProject ? openCreateResource : undefined} onQuickCreate={!signedIn ? openQuickCreate : undefined} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} account={account} onShowSignIn={() => setAuthOpen(true)} onSignOut={() => void handleSignOut()}>
     {storageError && <div role="alert" className="ui-error-banner mb-5"><span className="flex-1">{storageError}</span><button className="icon-button -my-1 text-danger" aria-label="Dismiss message" onClick={clearStorageError}><X size={15} /></button></div>}
     {auth.status === "error" && (
       <div role="alert" className="ui-error-banner mb-5 !items-center">
@@ -290,7 +291,9 @@ export default function App() {
     )}
     {signedIn ? <>
         {workspaceNotice && <div role="status" className={`mb-5 rounded-xl border border-line px-4 py-3 text-xs font-medium ${workspaceNotice.tone === "success" ? "bg-brand-soft text-brand" : "bg-danger-soft text-danger"}`}>{workspaceNotice.text}</div>}
-        <RealWorkspaceHome workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} />
+        {active === "Projects"
+          ? <RealProjectsPage workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} />
+          : <RealWorkspaceHome workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} />}
       </>
       : <>
         {!isPeoplePage && active !== "Overview" && !(scope === "project" && active === "Settings") && !(scope === "workspace" && active === "Projects") && <div className="mb-5 flex flex-wrap items-end justify-between gap-3 sm:mb-6"><div><h1 className="mobile-page-title text-2xl font-semibold tracking-tight">{pageTitle}</h1><p className="mt-1.5 text-sm text-muted">{description(scope, active, role)}</p></div>{action && <Button variant="primary" icon={<Plus size={15} />} onClick={scope === "workspace" ? openCreateProject : () => openCreateTask()}>{action}</Button>}</div>}

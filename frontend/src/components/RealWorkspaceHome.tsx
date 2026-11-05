@@ -185,11 +185,8 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken }: {
         <h2 className="text-sm font-semibold text-heading">Projects</h2>
         <EmptyState
           title="No projects yet"
-          description={isAdmin ? "Project creation arrives in the next integration slice." : "A workspace Owner or Admin sets up projects."}
+          description={isAdmin ? "Create the first project from the Projects page in the sidebar." : "A workspace Owner or Admin sets up projects."}
         />
-        {isAdmin && invitationsState === "ready" && (
-          <p className="text-xs text-muted">Suggest this workspace by inviting people through the workspace switcher in an upcoming slice.</p>
-        )}
       </section>
     </div>
   );
