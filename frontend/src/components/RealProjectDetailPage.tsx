@@ -17,18 +17,26 @@ import {
   LoadingState,
   Select,
   Tabs,
+  Textarea,
   TextInput,
 } from "./ui";
 import { friendlyError } from "../lib/api/client";
 import {
   projectsApi,
   type ApiMilestone,
+  type ApiMeeting,
+  type ApiMeetingType,
   type ApiProject,
   type ApiProjectMember,
   type ApiProjectStatus,
+  type ApiResource,
+  type ApiResourceType,
   type ApiTask,
+  type ApiTaskComment,
+  type ApiTaskDetail,
   type ApiTaskPriority,
   type ApiTaskStatus,
+  type ApiTaskSubtask,
 } from "../lib/api/projects";
 import type { WorkspaceState } from "../lib/real/useRealWorkspaces";
 
@@ -55,8 +63,8 @@ function shortDate(value: string | null): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString("en", { month: "short", day: "numeric" });
 }
 
-type TabName = "Tasks" | "Members" | "Milestones";
-const TABS: TabName[] = ["Tasks", "Members", "Milestones"];
+type TabName = "Tasks" | "Meetings" | "Resources" | "Members" | "Milestones";
+const TABS: TabName[] = ["Tasks", "Meetings", "Resources", "Members", "Milestones"];
 
 export function RealProjectDetailPage({ workspaceState, projectId, getAccessToken, onBack }: {
   workspaceState: WorkspaceState;
@@ -174,6 +182,31 @@ export function RealProjectDetailPage({ workspaceState, projectId, getAccessToke
             <MembersPanel members={members} milestones={milestones.length} />
           )}
 
+          {tab === "Meetings" && (
+            <MeetingsPanel
+              workspaceId={workspace.id}
+              projectId={projectId}
+              members={members}
+              isCollaborator={isCollaborator}
+              archived={archived}
+              getAccessToken={getAccessToken}
+              onNotice={text => { setStatusNotice(text); setActionError(null); }}
+              onError={text => { setActionError(text); setStatusNotice(null); }}
+            />
+          )}
+
+          {tab === "Resources" && (
+            <ResourcesPanel
+              workspaceId={workspace.id}
+              projectId={projectId}
+              isCollaborator={isCollaborator}
+              archived={archived}
+              getAccessToken={getAccessToken}
+              onNotice={text => { setStatusNotice(text); setActionError(null); }}
+              onError={text => { setActionError(text); setStatusNotice(null); }}
+            />
+          )}
+
           {tab === "Milestones" && (
             <MilestonesPanel
               workspaceId={workspace.id}
@@ -214,6 +247,7 @@ function TasksPanel({ workspaceId, projectId, project, members, isCollaborator, 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [statusFilter, setStatusFilter] = useState("" as ApiTaskStatus | "");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -358,30 +392,608 @@ function TasksPanel({ workspaceId, projectId, project, members, isCollaborator, 
       )}
       {phase === "ready" && tasks.length > 0 && (
         <ul className="divide-y divide-line rounded-xl border border-line bg-surface">
-          {tasks.map(task => (
-            <li key={task.id} className="flex flex-wrap items-start gap-3 p-4">
+          {tasks.map(task => {
+            const expanded = expandedId === task.id;
+            return (
+              <li key={task.id} className="p-4">
+                <div className="flex flex-wrap items-start gap-3">
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 text-left"
+                    aria-expanded={expanded}
+                    aria-label={`Task details: ${task.title}`}
+                    onClick={() => setExpandedId(expanded ? null : task.id)}
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate text-sm font-semibold text-heading">{task.title}</p>
+                      <Badge tone={taskStatusTone[task.status]}>{task.status}</Badge>
+                      <Badge tone={priorityTone[task.priority]}>{task.priority}</Badge>
+                    </div>
+                    {task.description && <p className="mt-1 line-clamp-2 text-xs text-muted">{task.description}</p>}
+                    <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted">
+                      <span>{task.assignee_display_name ?? "Unassigned"}</span>
+                      <span>Due {shortDate(task.due_date)}</span>
+                      <span className={expanded ? "text-brand" : ""}>{expanded ? "Hide details" : "Details"}</span>
+                    </p>
+                  </button>
+                  {isCollaborator && !archived && (
+                    <Select className="w-36" aria-label={`Change status of ${task.title}`} value={task.status} onChange={event => void changeStatus(task, event.target.value as ApiTaskStatus)}>
+                      {TASK_STATUSES.map(option => <option key={option} value={option}>{option}</option>)}
+                    </Select>
+                  )}
+                  {isManager && !archived && (
+                    <Button variant="ghost" size="sm" icon={<Trash2 size={14} />} aria-label={`Delete ${task.title}`} onClick={() => void removeTask(task)}>
+                      Delete
+                    </Button>
+                  )}
+                </div>
+                {expanded && (
+                  <TaskDrawer
+                    workspaceId={workspaceId}
+                    projectId={projectId}
+                    task={task}
+                    getAccessToken={getAccessToken}
+                    onClose={() => setExpandedId(null)}
+                    onNotice={onNotice}
+                    onError={onError}
+                  />
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Task drawer: description, subtasks, comments                        */
+/* ------------------------------------------------------------------ */
+
+function TaskDrawer({ workspaceId, projectId, task, getAccessToken, onClose, onNotice, onError }: {
+  workspaceId: string;
+  projectId: string;
+  task: ApiTask;
+  getAccessToken: () => Promise<string | null>;
+  onClose: () => void;
+  onNotice: (text: string) => void;
+  onError: (text: string) => void;
+}) {
+  const [detail, setDetail] = useState<ApiTaskDetail | null>(null);
+  const [subtasks, setSubtasks] = useState<ApiTaskSubtask[]>([]);
+  const [comments, setComments] = useState<ApiTaskComment[]>([]);
+  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [subtaskTitle, setSubtaskTitle] = useState("");
+  const [addingSubtask, setAddingSubtask] = useState(false);
+  const [commentBody, setCommentBody] = useState("");
+  const [addingComment, setAddingComment] = useState(false);
+
+  useEffect(() => {
+    let disposed = false;
+    setPhase("loading");
+    void (async () => {
+      const token = await getAccessToken();
+      if (!token) return;
+      try {
+        const [detailRow, subtaskRows, commentRows] = await Promise.all([
+          projectsApi.getTaskDetail(token, workspaceId, projectId, task.id),
+          projectsApi.listSubtasks(token, workspaceId, projectId, task.id),
+          projectsApi.listComments(token, workspaceId, projectId, task.id),
+        ]);
+        if (disposed) return;
+        setDetail(detailRow);
+        setSubtasks(subtaskRows);
+        setComments(commentRows.filter(row => row.deleted_at === null));
+        setPhase("ready");
+      } catch (error) {
+        if (disposed) return;
+        const friendly = friendlyError(error, "Could not load task details");
+        setErrorMessage(`${friendly.title}: ${friendly.message}`);
+        setPhase("error");
+      }
+    })();
+    return () => { disposed = true; };
+  }, [workspaceId, projectId, task.id, getAccessToken, reloadToken]);
+
+  async function addSubtask(event: FormEvent) {
+    event.preventDefault();
+    if (!subtaskTitle.trim()) return;
+    setAddingSubtask(true);
+    try {
+      const token = await getAccessToken();
+      if (!token) return;
+      const created = await projectsApi.createSubtask(token, workspaceId, projectId, task.id, { title: subtaskTitle.trim() });
+      setSubtasks(previous => [...previous, created]);
+      setSubtaskTitle("");
+      onNotice("Subtask added.");
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not add subtask");
+      onError(`${friendly.title}: ${friendly.message}`);
+    } finally {
+      setAddingSubtask(false);
+    }
+  }
+
+  async function toggleSubtask(subtask: ApiTaskSubtask) {
+    setSubtasks(previous => previous.map(item => (item.id === subtask.id ? { ...item, is_done: !item.is_done } : item)));
+    try {
+      const token = await getAccessToken();
+      if (!token) return;
+      const updated = await projectsApi.updateSubtask(token, workspaceId, projectId, task.id, subtask.id, { is_done: !subtask.is_done });
+      setSubtasks(previous => previous.map(item => (item.id === updated.id ? updated : item)));
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not update subtask");
+      onError(`${friendly.title}: ${friendly.message}`);
+      setSubtasks(previous => previous.map(item => (item.id === subtask.id ? subtask : item)));
+    }
+  }
+
+  async function removeSubtask(subtask: ApiTaskSubtask) {
+    setSubtasks(previous => previous.filter(item => item.id !== subtask.id));
+    try {
+      const token = await getAccessToken();
+      if (!token) return;
+      await projectsApi.deleteSubtask(token, workspaceId, projectId, task.id, subtask.id);
+      onNotice("Subtask removed.");
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not remove subtask");
+      onError(`${friendly.title}: ${friendly.message}`);
+      setReloadToken(token => token + 1);
+    }
+  }
+
+  async function addComment(event: FormEvent) {
+    event.preventDefault();
+    if (!commentBody.trim()) return;
+    setAddingComment(true);
+    try {
+      const token = await getAccessToken();
+      if (!token) return;
+      const created = await projectsApi.createComment(token, workspaceId, projectId, task.id, commentBody.trim());
+      setComments(previous => [...previous, created]);
+      setCommentBody("");
+      onNotice("Comment posted.");
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not post comment");
+      onError(`${friendly.title}: ${friendly.message}`);
+    } finally {
+      setAddingComment(false);
+    }
+  }
+
+  async function removeComment(comment: ApiTaskComment) {
+    if (!window.confirm("Delete this comment?")) return;
+    setComments(previous => previous.filter(item => item.id !== comment.id));
+    try {
+      const token = await getAccessToken();
+      if (!token) return;
+      await projectsApi.deleteComment(token, workspaceId, projectId, task.id, comment.id);
+      onNotice("Comment deleted.");
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not delete comment");
+      onError(`${friendly.title}: ${friendly.message}`);
+      setReloadToken(token => token + 1);
+    }
+  }
+
+  const doneCount = subtasks.filter(item => item.is_done).length;
+
+  return (
+    <div className="mt-3 space-y-4 rounded-xl border border-line bg-surface p-4">
+      {phase === "loading" && <LoadingState label="Loading task details" />}
+      {phase === "error" && (
+        <ErrorState title="Task details could not be loaded" description={errorMessage ?? "Retry in a moment."} action={<Button onClick={() => setReloadToken(token => token + 1)}>Retry</Button>} />
+      )}
+      {phase === "ready" && detail && (
+        <>
+          <div className="flex items-start justify-between gap-3">
+            <p className="whitespace-pre-line text-sm text-muted">{detail.description || "No description."}</p>
+            <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-heading">Subtasks {subtasks.length > 0 && <span className="font-normal text-muted">({doneCount}/{subtasks.length} done)</span>}</p>
+            {subtasks.length === 0 && <p className="text-xs text-muted">No subtasks yet.</p>}
+            {subtasks.length > 0 && (
+              <ul className="space-y-1">
+                {subtasks.map(subtask => (
+                  <li key={subtask.id} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2">
+                    <input type="checkbox" checked={subtask.is_done} onChange={() => void toggleSubtask(subtask)} aria-label={`Mark subtask ${subtask.title}`} className="h-4 w-4" />
+                    <p className={`min-w-0 flex-1 truncate text-xs ${subtask.is_done ? "text-muted line-through" : "text-heading"}`}>{subtask.title}</p>
+                    <Button variant="ghost" size="sm" icon={<Trash2 size={13} />} aria-label={`Remove subtask ${subtask.title}`} onClick={() => void removeSubtask(subtask)}>Remove</Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <form onSubmit={addSubtask} className="flex flex-wrap items-end gap-2">
+              <TextInput className="min-w-0 flex-1" maxLength={240} value={subtaskTitle} onChange={event => setSubtaskTitle(event.target.value)} placeholder="New subtask" aria-label="New subtask title" />
+              <Button type="submit" size="sm" disabled={addingSubtask || subtaskTitle.trim().length === 0}>
+                Add
+              </Button>
+            </form>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-heading">Comments {comments.length > 0 && <span className="font-normal text-muted">({comments.length})</span>}</p>
+            {comments.length === 0 && <p className="text-xs text-muted">No comments yet.</p>}
+            {comments.length > 0 && (
+              <ul className="space-y-1">
+                {comments.map(comment => (
+                  <li key={comment.id} className="flex items-start gap-2 rounded-lg border border-line px-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[10px] text-muted">{comment.author_display_name} · {shortDate(comment.created_at)}</p>
+                      <p className="mt-0.5 whitespace-pre-line text-xs text-heading">{comment.body ?? ""}</p>
+                    </div>
+                    <Button variant="ghost" size="sm" icon={<Trash2 size={13} />} aria-label="Delete comment" onClick={() => void removeComment(comment)}>Delete</Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <form onSubmit={addComment} className="space-y-2">
+              <Textarea rows={2} maxLength={20000} value={commentBody} onChange={event => setCommentBody(event.target.value)} placeholder="Write a comment…" aria-label="New comment" />
+              <Button type="submit" size="sm" disabled={addingComment || commentBody.trim().length === 0}>
+                Post comment
+              </Button>
+            </form>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Meetings                                                            */
+/* ------------------------------------------------------------------ */
+
+const MEETING_TYPES: ApiMeetingType[] = ["Team sync", "Review", "Planning", "Retrospective", "Other"];
+
+function formatDateTime(value: string): string {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime())
+    ? value
+    : parsed.toLocaleString("en", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, archived, getAccessToken, onNotice, onError }: {
+  workspaceId: string;
+  projectId: string;
+  members: ApiProjectMember[];
+  isCollaborator: boolean;
+  archived: boolean;
+  getAccessToken: () => Promise<string | null>;
+  onNotice: (text: string) => void;
+  onError: (text: string) => void;
+}) {
+  const [meetings, setMeetings] = useState<ApiMeeting[]>([]);
+  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [formOpen, setFormOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [startAt, setStartAt] = useState("");
+  const [duration, setDuration] = useState(60);
+  const [meetingType, setMeetingType] = useState<ApiMeetingType>("Team sync");
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    setPhase(previous => (previous === "ready" ? previous : "loading"));
+    void (async () => {
+      const token = await getAccessToken();
+      if (!token) return;
+      try {
+        const rows = await projectsApi.listMeetings(token, workspaceId, projectId, { limit: 100 });
+        if (disposed) return;
+        setMeetings(rows);
+        setPhase("ready");
+      } catch (error) {
+        if (disposed) return;
+        const friendly = friendlyError(error, "Could not load meetings");
+        setErrorMessage(`${friendly.title}: ${friendly.message}`);
+        setPhase("error");
+      }
+    })();
+    return () => { disposed = true; };
+  }, [workspaceId, projectId, getAccessToken, reloadToken]);
+
+  async function submitCreate(event: FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        setFormError("Sign-in session ended. Please sign in again.");
+        return;
+      }
+      const starts = new Date(startAt);
+      if (Number.isNaN(starts.getTime())) {
+        setFormError("Pick a start date and time.");
+        return;
+      }
+      const created = await projectsApi.createMeeting(token, workspaceId, projectId, {
+        title: title.trim(),
+        description: description.trim(),
+        starts_at: starts.toISOString(),
+        duration_minutes: duration,
+        meeting_type: meetingType,
+      });
+      setMeetings(previous => [...previous, created]);
+      onNotice(`Meeting "${created.title}" scheduled.`);
+      setTitle("");
+      setDescription("");
+      setStartAt("");
+      setFormOpen(false);
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not schedule meeting");
+      setFormError(`${friendly.title}: ${friendly.message}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function removeMeeting(meeting: ApiMeeting) {
+    if (!window.confirm(`Delete meeting "${meeting.title}"?`)) return;
+    setMeetings(previous => previous.filter(item => item.id !== meeting.id));
+    try {
+      const token = await getAccessToken();
+      if (!token) return;
+      await projectsApi.deleteMeeting(token, workspaceId, projectId, meeting.id);
+      onNotice(`Meeting "${meeting.title}" deleted.`);
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not delete meeting");
+      onError(`${friendly.title}: ${friendly.message}`);
+      setReloadToken(token => token + 1);
+    }
+  }
+
+  const sorted = [...meetings].sort((a, b) => a.starts_at.localeCompare(b.starts_at));
+
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        {isCollaborator && !archived && (
+          <Button variant="primary" size="sm" icon={<Plus size={14} />} onClick={() => { setFormOpen(open => !open); onNotice(""); }}>
+            {formOpen ? "Cancel" : "Schedule meeting"}
+          </Button>
+        )}
+      </div>
+
+      {formOpen && isCollaborator && !archived && (
+        <form onSubmit={submitCreate} className="space-y-3 rounded-xl border border-line bg-surface p-4">
+          <TextInput label="Title" required maxLength={200} value={title} onChange={event => setTitle(event.target.value)} placeholder="Weekly review" />
+          <label className="block space-y-1.5">
+            <span className="ui-label">Starts at</span>
+            <input type="datetime-local" required className="ui-input" value={startAt} onChange={event => setStartAt(event.target.value)} />
+          </label>
+          <div className="flex flex-wrap gap-3">
+            <Select label="Type" className="w-44" value={meetingType} onChange={event => setMeetingType(event.target.value as ApiMeetingType)}>
+              {MEETING_TYPES.map(option => <option key={option} value={option}>{option}</option>)}
+            </Select>
+            <label className="block flex-1 space-y-1.5">
+              <span className="ui-label">Duration (minutes)</span>
+              <input type="number" min={1} max={1440} required className="ui-input" value={duration} onChange={event => setDuration(Number(event.target.value) || 0)} />
+            </label>
+          </div>
+          <Textarea label="Description" rows={2} maxLength={20000} value={description} onChange={event => setDescription(event.target.value)} placeholder="Optional notes for attendees (agenda/editing arrive later)" />
+          {formError && <p className="text-xs text-danger">{formError}</p>}
+          <Button type="submit" variant="primary" size="sm" disabled={submitting} icon={submitting ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}>
+            {submitting ? "Scheduling…" : "Schedule meeting"}
+          </Button>
+        </form>
+      )}
+
+      {phase === "loading" && <LoadingState label="Loading meetings" />}
+      {phase === "error" && (
+        <ErrorState title="Meetings could not be loaded" description={errorMessage ?? "Retry in a moment."} action={<Button onClick={() => setReloadToken(token => token + 1)}>Retry</Button>} />
+      )}
+      {phase === "ready" && sorted.length === 0 && (
+        <EmptyState title="No meetings" description={isCollaborator && !archived ? "Schedule the first meeting for this project." : "No meetings recorded for this project yet."} />
+      )}
+      {phase === "ready" && sorted.length > 0 && (
+        <ul className="divide-y divide-line rounded-xl border border-line bg-surface">
+          {sorted.map(meeting => (
+            <li key={meeting.id} className="flex flex-wrap items-start gap-3 p-4">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <p className="truncate text-sm font-semibold text-heading">{task.title}</p>
-                  <Badge tone={taskStatusTone[task.status]}>{task.status}</Badge>
-                  <Badge tone={priorityTone[task.priority]}>{task.priority}</Badge>
+                  <p className="truncate text-sm font-semibold text-heading">{meeting.title}</p>
+                  <Badge tone="brand">{meeting.meeting_type}</Badge>
                 </div>
-                {task.description && <p className="mt-1 line-clamp-2 text-xs text-muted">{task.description}</p>}
+                {meeting.description && <p className="mt-1 line-clamp-2 text-xs text-muted">{meeting.description}</p>}
                 <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted">
-                  <span>{task.assignee_display_name ?? "Unassigned"}</span>
-                  <span>Due {shortDate(task.due_date)}</span>
+                  <span>{formatDateTime(meeting.starts_at)}</span>
+                  <span>{meeting.duration_minutes} min</span>
+                  <span>{meeting.attendee_count} attendee{meeting.attendee_count === 1 ? "" : "s"}</span>
+                  {meeting.organizer_display_name && <span>Organizer: {meeting.organizer_display_name}</span>}
                 </p>
               </div>
-              {isCollaborator && !archived && (
-                <Select className="w-36" aria-label={`Change status of ${task.title}`} value={task.status} onChange={event => void changeStatus(task, event.target.value as ApiTaskStatus)}>
-                  {TASK_STATUSES.map(option => <option key={option} value={option}>{option}</option>)}
-                </Select>
-              )}
-              {isManager && !archived && (
-                <Button variant="ghost" size="sm" icon={<Trash2 size={14} />} aria-label={`Delete ${task.title}`} onClick={() => void removeTask(task)}>
-                  Delete
-                </Button>
-              )}
+              <Button variant="ghost" size="sm" icon={<Trash2 size={14} />} aria-label={`Delete ${meeting.title}`} onClick={() => void removeMeeting(meeting)}>
+                Delete
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-[10px] text-muted">{members.length} collaborator{members.length === 1 ? "" : "s"} available. Attendee management comes in a later slice.</p>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Resources                                                           */
+/* ------------------------------------------------------------------ */
+
+const RESOURCE_TYPES: ApiResourceType[] = ["Document", "Spreadsheet", "Design file", "Folder", "Link"];
+
+function ResourcesPanel({ workspaceId, projectId, isCollaborator, archived, getAccessToken, onNotice, onError }: {
+  workspaceId: string;
+  projectId: string;
+  isCollaborator: boolean;
+  archived: boolean;
+  getAccessToken: () => Promise<string | null>;
+  onNotice: (text: string) => void;
+  onError: (text: string) => void;
+}) {
+  const [resources, setResources] = useState<ApiResource[]>([]);
+  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [formOpen, setFormOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [resourceType, setResourceType] = useState<ApiResourceType>("Link");
+  const [category, setCategory] = useState("");
+  const [detail, setDetail] = useState("");
+  const [externalUrl, setExternalUrl] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    setPhase(previous => (previous === "ready" ? previous : "loading"));
+    void (async () => {
+      const token = await getAccessToken();
+      if (!token) return;
+      try {
+        const rows = await projectsApi.listResources(token, workspaceId, projectId, { limit: 100 });
+        if (disposed) return;
+        setResources(rows);
+        setPhase("ready");
+      } catch (error) {
+        if (disposed) return;
+        const friendly = friendlyError(error, "Could not load resources");
+        setErrorMessage(`${friendly.title}: ${friendly.message}`);
+        setPhase("error");
+      }
+    })();
+    return () => { disposed = true; };
+  }, [workspaceId, projectId, getAccessToken, reloadToken]);
+
+  async function submitCreate(event: FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        setFormError("Sign-in session ended. Please sign in again.");
+        return;
+      }
+      const created = await projectsApi.createResource(token, workspaceId, projectId, {
+        name: name.trim(),
+        type: resourceType,
+        category: category.trim(),
+        detail: detail.trim(),
+        external_url: externalUrl.trim() || null,
+      });
+      setResources(previous => [created, ...previous]);
+      onNotice(`Resource "${created.name}" added.`);
+      setName("");
+      setCategory("");
+      setDetail("");
+      setExternalUrl("");
+      setFormOpen(false);
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not add resource");
+      setFormError(`${friendly.title}: ${friendly.message}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function toggleStar(resource: ApiResource) {
+    setResources(previous => previous.map(item => (item.id === resource.id ? { ...item, is_starred: !item.is_starred } : item)));
+    try {
+      const token = await getAccessToken();
+      if (!token) return;
+      const star = await projectsApi.toggleResourceStar(token, workspaceId, projectId, resource.id);
+      setResources(previous => previous.map(item => (item.id === star.resource_id ? { ...item, is_starred: star.starred } : item)));
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not update star");
+      onError(`${friendly.title}: ${friendly.message}`);
+      setResources(previous => previous.map(item => (item.id === resource.id ? resource : item)));
+    }
+  }
+
+  async function removeResource(resource: ApiResource) {
+    if (!window.confirm(`Delete resource "${resource.name}"?`)) return;
+    setResources(previous => previous.filter(item => item.id !== resource.id));
+    try {
+      const token = await getAccessToken();
+      if (!token) return;
+      await projectsApi.deleteResource(token, workspaceId, projectId, resource.id);
+      onNotice(`Resource "${resource.name}" deleted.`);
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not delete resource");
+      onError(`${friendly.title}: ${friendly.message}`);
+      setReloadToken(token => token + 1);
+    }
+  }
+
+  const sorted = [...resources].sort((a, b) => Number(b.is_starred) - Number(a.is_starred) || b.updated_at.localeCompare(a.updated_at));
+
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        {isCollaborator && !archived && (
+          <Button variant="primary" size="sm" icon={<Plus size={14} />} onClick={() => { setFormOpen(open => !open); onNotice(""); }}>
+            {formOpen ? "Cancel" : "Add resource"}
+          </Button>
+        )}
+      </div>
+
+      {formOpen && isCollaborator && !archived && (
+        <form onSubmit={submitCreate} className="space-y-3 rounded-xl border border-line bg-surface p-4">
+          <TextInput label="Name" required maxLength={240} value={name} onChange={event => setName(event.target.value)} placeholder="Design system Figma" />
+          <Select label="Type" value={resourceType} onChange={event => setResourceType(event.target.value as ApiResourceType)}>
+            {RESOURCE_TYPES.map(option => <option key={option} value={option}>{option}</option>)}
+          </Select>
+          <TextInput label="Category" required maxLength={100} value={category} onChange={event => setCategory(event.target.value)} placeholder="Design" />
+          <TextInput label="Link URL" type="url" maxLength={2048} value={externalUrl} onChange={event => setExternalUrl(event.target.value)} placeholder="https://…" hint="Optional; upload support comes later" />
+          <Textarea label="Detail" rows={2} maxLength={20000} value={detail} onChange={event => setDetail(event.target.value)} placeholder="Short description" />
+          {formError && <p className="text-xs text-danger">{formError}</p>}
+          <Button type="submit" variant="primary" size="sm" disabled={submitting} icon={submitting ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}>
+            {submitting ? "Adding…" : "Add resource"}
+          </Button>
+        </form>
+      )}
+
+      {phase === "loading" && <LoadingState label="Loading resources" />}
+      {phase === "error" && (
+        <ErrorState title="Resources could not be loaded" description={errorMessage ?? "Retry in a moment."} action={<Button onClick={() => setReloadToken(token => token + 1)}>Retry</Button>} />
+      )}
+      {phase === "ready" && sorted.length === 0 && (
+        <EmptyState title="No resources" description={isCollaborator && !archived ? "Add the first link or document reference." : "No resources recorded for this project yet."} />
+      )}
+      {phase === "ready" && sorted.length > 0 && (
+        <ul className="divide-y divide-line rounded-xl border border-line bg-surface">
+          {sorted.map(resource => (
+            <li key={resource.id} className="flex flex-wrap items-start gap-3 p-4">
+              <button type="button" aria-label={resource.is_starred ? `Unstar ${resource.name}` : `Star ${resource.name}`} className="text-lg leading-6" onClick={() => void toggleStar(resource)}>
+                {resource.is_starred ? "★" : "☆"}
+              </button>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="truncate text-sm font-semibold text-heading">{resource.name}</p>
+                  <Badge tone="neutral">{resource.type}</Badge>
+                </div>
+                {resource.external_url && (
+                  <a href={resource.external_url} target="_blank" rel="noreferrer" className="mt-1 block truncate text-xs text-brand underline">{resource.external_url}</a>
+                )}
+                {resource.detail && <p className="mt-1 line-clamp-2 text-xs text-muted">{resource.detail}</p>}
+                <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted">
+                  <span>{resource.category}</span>
+                  {resource.owner_display_name && <span>Owner: {resource.owner_display_name}</span>}
+                </p>
+              </div>
+              <Button variant="ghost" size="sm" icon={<Trash2 size={14} />} aria-label={`Delete ${resource.name}`} onClick={() => void removeResource(resource)}>
+                Delete
+              </Button>
             </li>
           ))}
         </ul>

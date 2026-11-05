@@ -5,7 +5,7 @@
  * optional query parameters. Identity and permissions stay server-side.
  */
 
-import { apiDelete, apiGet, apiPatch, apiPost } from "./client";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "./client";
 
 export type ApiProjectStatus = "In progress" | "In review" | "Complete";
 export type ApiProgressMode = "auto" | "manual";
@@ -119,7 +119,120 @@ export interface ProjectsApi {
     description?: string;
   }): Promise<ApiTask>;
   deleteTask(accessToken: string, workspaceId: string, projectId: string, taskId: string): Promise<void>;
+  getTaskDetail(accessToken: string, workspaceId: string, projectId: string, taskId: string): Promise<ApiTaskDetail>;
+  listSubtasks(accessToken: string, workspaceId: string, projectId: string, taskId: string): Promise<ApiTaskSubtask[]>;
+  createSubtask(accessToken: string, workspaceId: string, projectId: string, taskId: string, input: { title: string }): Promise<ApiTaskSubtask>;
+  updateSubtask(accessToken: string, workspaceId: string, projectId: string, taskId: string, subtaskId: string, patch: { title?: string; is_done?: boolean }): Promise<ApiTaskSubtask>;
+  deleteSubtask(accessToken: string, workspaceId: string, projectId: string, taskId: string, subtaskId: string): Promise<void>;
+  listComments(accessToken: string, workspaceId: string, projectId: string, taskId: string): Promise<ApiTaskComment[]>;
+  createComment(accessToken: string, workspaceId: string, projectId: string, taskId: string, body: string): Promise<ApiTaskComment>;
+  deleteComment(accessToken: string, workspaceId: string, projectId: string, taskId: string, commentId: string): Promise<void>;
+  listMeetings(accessToken: string, workspaceId: string, projectId: string, filters?: { limit?: number }): Promise<ApiMeeting[]>;
+  createMeeting(accessToken: string, workspaceId: string, projectId: string, input: {
+    title: string;
+    description?: string;
+    starts_at: string;
+    duration_minutes: number;
+    meeting_type?: ApiMeetingType;
+    agenda?: string;
+    attendee_user_ids?: string[];
+  }): Promise<ApiMeeting>;
+  deleteMeeting(accessToken: string, workspaceId: string, projectId: string, meetingId: string): Promise<void>;
+  listResources(accessToken: string, workspaceId: string, projectId: string, filters?: { type?: ApiResourceType | ""; limit?: number }): Promise<ApiResource[]>;
+  createResource(accessToken: string, workspaceId: string, projectId: string, input: {
+    name: string;
+    type: ApiResourceType;
+    category: string;
+    detail?: string;
+    external_url?: string | null;
+  }): Promise<ApiResource>;
+  toggleResourceStar(accessToken: string, workspaceId: string, projectId: string, resourceId: string): Promise<ApiResourceStar>;
+  deleteResource(accessToken: string, workspaceId: string, projectId: string, resourceId: string): Promise<void>;
 }
+
+/** GET /tasks/{task_id} detail response: adds subtask counters. */
+export type ApiTaskDetail = ApiTask & {
+  subtask_count: number;
+  completed_subtask_count: number;
+};
+
+export type ApiTaskSubtask = {
+  id: string;
+  task_id: string;
+  title: string;
+  is_done: boolean;
+  position: string;
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * Comments under GET/POST /tasks/{task_id}/comments. `body` becomes null and
+ * `deleted_at` set once a comment is deleted (soft-delete contract).
+ */
+export type ApiTaskComment = {
+  id: string;
+  task_id: string;
+  workspace_id: string;
+  project_id: string;
+  author_user_id: string;
+  author_display_name: string;
+  body: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+};
+
+/**
+ * Meetings under GET/POST /workspaces/{wid}/projects/{pid}/meetings.
+ * `starts_at`/`ends_at` are UTC ISO instants; creation requires a
+ * timezone-bearing `starts_at` (the client sends an ISO instant).
+ */
+export type ApiMeetingType = "Team sync" | "Review" | "Planning" | "Retrospective" | "Other";
+export type ApiMeeting = {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  title: string;
+  description: string;
+  starts_at: string;
+  ends_at: string;
+  duration_minutes: number;
+  meeting_type: ApiMeetingType;
+  agenda: string;
+  created_at: string;
+  updated_at: string;
+  organizer_user_id: string | null;
+  organizer_display_name: string | null;
+  attendee_count: number;
+};
+
+/** Resources under GET/POST /workspaces/{wid}/projects/{pid}/resources. */
+export type ApiResourceType = "Document" | "Spreadsheet" | "Design file" | "Folder" | "Link";
+export type ApiResource = {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  owner_user_id: string;
+  owner_display_name: string;
+  name: string;
+  type: ApiResourceType;
+  category: string;
+  detail: string;
+  external_url: string | null;
+  storage_object_path: string | null;
+  size_bytes: number | null;
+  tags: string[];
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+  is_starred: boolean;
+};
+
+export type ApiResourceStar = {
+  resource_id: string;
+  starred: boolean;
+};
 
 function buildQuery(filters?: ProjectListFilters): string {
   const params: string[] = [];
@@ -175,5 +288,69 @@ export const projectsApi: ProjectsApi = {
   },
   async deleteTask(accessToken: string, workspaceId: string, projectId: string, taskId: string) {
     return apiDelete(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}`, accessToken);
+  },
+  async getTaskDetail(accessToken: string, workspaceId: string, projectId: string, taskId: string) {
+    return apiGet<ApiTaskDetail>(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}`, accessToken);
+  },
+  async listSubtasks(accessToken: string, workspaceId: string, projectId: string, taskId: string) {
+    return apiGet<ApiTaskSubtask[]>(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}/subtasks`, accessToken);
+  },
+  async createSubtask(accessToken: string, workspaceId: string, projectId: string, taskId: string, input: { title: string }) {
+    return apiPost<ApiTaskSubtask>(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}/subtasks`, input, accessToken);
+  },
+  async updateSubtask(accessToken: string, workspaceId: string, projectId: string, taskId: string, subtaskId: string, patch: { title?: string; is_done?: boolean }) {
+    return apiPatch<ApiTaskSubtask>(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}/subtasks/${subtaskId}`, patch, accessToken);
+  },
+  async deleteSubtask(accessToken: string, workspaceId: string, projectId: string, taskId: string, subtaskId: string) {
+    return apiDelete(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}/subtasks/${subtaskId}`, accessToken);
+  },
+  async listComments(accessToken: string, workspaceId: string, projectId: string, taskId: string) {
+    return apiGet<ApiTaskComment[]>(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}/comments`, accessToken);
+  },
+  async createComment(accessToken: string, workspaceId: string, projectId: string, taskId: string, body: string) {
+    return apiPost<ApiTaskComment>(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}/comments`, { body }, accessToken);
+  },
+  async deleteComment(accessToken: string, workspaceId: string, projectId: string, taskId: string, commentId: string) {
+    return apiDelete(`/workspaces/${workspaceId}/projects/${projectId}/tasks/${taskId}/comments/${commentId}`, accessToken);
+  },
+  async listMeetings(accessToken: string, workspaceId: string, projectId: string, filters?: { limit?: number }) {
+    const query = filters?.limit ? `?limit=${filters.limit}` : "";
+    return apiGet<ApiMeeting[]>(`/workspaces/${workspaceId}/projects/${projectId}/meetings${query}`, accessToken);
+  },
+  async createMeeting(accessToken: string, workspaceId: string, projectId: string, input: {
+    title: string;
+    description?: string;
+    starts_at: string;
+    duration_minutes: number;
+    meeting_type?: ApiMeetingType;
+    agenda?: string;
+    attendee_user_ids?: string[];
+  }) {
+    return apiPost<ApiMeeting>(`/workspaces/${workspaceId}/projects/${projectId}/meetings`, input, accessToken);
+  },
+  async deleteMeeting(accessToken: string, workspaceId: string, projectId: string, meetingId: string) {
+    return apiDelete(`/workspaces/${workspaceId}/projects/${projectId}/meetings/${meetingId}`, accessToken);
+  },
+  async listResources(accessToken: string, workspaceId: string, projectId: string, filters?: { type?: ApiResourceType | ""; limit?: number }) {
+    const params: string[] = [];
+    if (filters?.type) params.push(`type=${encodeURIComponent(filters.type)}`);
+    if (filters?.limit) params.push(`limit=${filters.limit}`);
+    const query = params.length > 0 ? `?${params.join("&")}` : "";
+    return apiGet<ApiResource[]>(`/workspaces/${workspaceId}/projects/${projectId}/resources${query}`, accessToken);
+  },
+  async createResource(accessToken: string, workspaceId: string, projectId: string, input: {
+    name: string;
+    type: ApiResourceType;
+    category: string;
+    detail?: string;
+    external_url?: string | null;
+  }) {
+    return apiPost<ApiResource>(`/workspaces/${workspaceId}/projects/${projectId}/resources`, input, accessToken);
+  },
+  async toggleResourceStar(accessToken: string, workspaceId: string, projectId: string, resourceId: string) {
+    return apiPut<ApiResourceStar>(`/workspaces/${workspaceId}/projects/${projectId}/resources/${resourceId}/star`, accessToken);
+  },
+  async deleteResource(accessToken: string, workspaceId: string, projectId: string, resourceId: string) {
+    return apiDelete(`/workspaces/${workspaceId}/projects/${projectId}/resources/${resourceId}`, accessToken);
   },
 };
