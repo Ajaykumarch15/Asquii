@@ -66,7 +66,7 @@ This document is a step-by-step regression script for the integrated frontend. I
 
 ### 2.4 Known quirks (do not raise as defects)
 
-- **Transient "Session expired…"**: the first load after a long idle can show this once; reload and sign in again. Only report it if it repeats after a successful sign-in.
+- **Clock skew**: the backend accepts a 30-second skew on `iat`/`nbf`/`exp` (PyJWT 2.10 rejects a token whose `iat` is even a moment in the future). A fresh sign-in must no longer 401 with "Invalid or expired access token"; if it does, check the machine clock and the backend's `SUPABASE_URL`/`SUPABASE_JWT_AUDIENCE`.
 - **Invitation token shown once**: the token is returned only in the creation response. If it is lost, revoke the invitation and create another.
 - **No per-person notifications**: the workspace activity feed is the notification surface by design.
 - **Sidebar navigation is state-based**: only landing ↔ demo uses browser history entries. Browser Back from People/Settings/Overview is not expected to walk the sidebar history (see §10.4).
@@ -1582,15 +1582,15 @@ Fill the counts at the end of the run.
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
 **Notes:**
 
-### TC-REG-08 — Session-expired quirk recovery
+### TC-REG-08 — Fresh sign-in is not rejected by clock skew
 
-**Priority:** Medium
+**Priority:** High
 
 | # | Action | Expected result |
 |---|---|---|
-| 1 | Sign in and leave the tab idle until the access token expires (or simulate by clearing the session token while keeping the app open). | A "Session expired…" message may appear once. |
-| 2 | Reload and sign in again. | Sign-in succeeds; the app works normally. |
-| 3 | Check the console. | No uncaught exceptions or repeated retry loops. |
+| 1 | Sign out, then sign in as Owner immediately. | Sign-in succeeds on the first attempt; no `401` on `GET /api/v1/auth/me` in the console/network tab. |
+| 2 | Confirm the home loads with real data. | The workspace card and projects render without reloading. |
+| 3 | If a 401 still appears, compare the machine clock with a reliable time source. | A skew greater than the backend's 30-second leeway is the cause; the token itself is valid. |
 
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
 **Notes:**
