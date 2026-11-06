@@ -52,13 +52,15 @@ function shortDateTime(value: string): string {
 /** Feed page size: one screen of events plus explicit "Load more" paging. */
 const ACTIVITY_PAGE_SIZE = 8;
 
-export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUserId, onOpenProject }: {
+export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUserId, onOpenProject, section = "home" }: {
   workspaceState: WorkspaceState;
   getAccessToken: () => Promise<string | null>;
   /** Signed-in user's id; used to distinguish "Leave" from "Remove" in the people list. */
   identityUserId: string;
   /** Drill into a project from the home overview (switches to the Projects route). */
   onOpenProject: (projectId: string) => void;
+  /** "people"/"settings" render just that sidebar page; "home" is the full overview. */
+  section?: "home" | "people" | "settings";
 }) {
   const [members, setMembers] = useState<ApiWorkspaceMember[] | null>(null);
   const [membersState, setMembersState] = useState<"loading" | "ready" | "error">("loading");
@@ -514,6 +516,7 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
         </div>
       </div>
 
+      {(section === "home" || section === "settings") && (
       <section className="space-y-3">
         <h2 className="text-sm font-semibold text-heading">Workspace settings</h2>
         {(isAdmin || isOwner) && (
@@ -564,7 +567,9 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
           </div>
         )}
       </section>
+      )}
 
+      {section !== "settings" && (<>
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-heading"><Users size={15} className="text-muted" />People ({members?.length ?? 0})</h2>
@@ -704,7 +709,9 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
           </ul>
         )}
       </section>
+      </>)}
 
+      {section === "home" && (<>
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-heading">Projects{projectsState === "ready" && projects ? ` (${projects.length})` : ""}</h2>
@@ -855,6 +862,7 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
           This feed is the workspace's notification surface — every action is recorded here; there is no separate per-person inbox yet.
         </p>
       </section>
+      </>)}
     </div>
   );
 }
