@@ -258,7 +258,7 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
       const updated = await workspaceApi.renameWorkspace(token, workspace.id, name);
       workspaceState.applyWorkspace(updated);
       setRenameName(updated.name);
-      setNotice({ tone: "success", text: `Workspace renamed — URL slug is now asquii.com/${updated.slug}.` });
+      setNotice({ tone: "success", text: `Workspace renamed to ${updated.name}.` });
     } catch (error) {
       const friendly = friendlyError(error, "Could not rename the workspace");
       setRenameError(`${friendly.title}: ${friendly.message}`);
@@ -398,7 +398,7 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
                     onChange={event => setRenameName(event.target.value)}
                     icon={<Pencil size={13} />}
                   />
-                  <p className="mt-1 text-[10px] text-muted">Renaming regenerates the shared URL slug (asquii.com/{workspace.slug}).</p>
+                  <p className="mt-1 text-[10px] text-muted">Shared URL is asquii.com/{workspace.slug} — the slug is set at creation and stays stable when renamed.</p>
                 </div>
                 <Button
                   type="submit"
