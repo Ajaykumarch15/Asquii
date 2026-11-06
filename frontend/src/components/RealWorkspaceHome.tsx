@@ -59,8 +59,8 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
   identityUserId: string;
   /** Drill into a project from the home overview (switches to the Projects route). */
   onOpenProject: (projectId: string) => void;
-  /** "people" renders the members/invitations page only; the sidebar routes here. */
-  section?: "home" | "people";
+  /** "people"/"settings" render just that sidebar page; "home" is the full overview. */
+  section?: "home" | "people" | "settings";
 }) {
   const [members, setMembers] = useState<ApiWorkspaceMember[] | null>(null);
   const [membersState, setMembersState] = useState<"loading" | "ready" | "error">("loading");
@@ -516,7 +516,7 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
         </div>
       </div>
 
-      {section === "home" && (
+      {(section === "home" || section === "settings") && (
       <section className="space-y-3">
         <h2 className="text-sm font-semibold text-heading">Workspace settings</h2>
         {(isAdmin || isOwner) && (
@@ -569,6 +569,7 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
       </section>
       )}
 
+      {section !== "settings" && (<>
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-heading"><Users size={15} className="text-muted" />People ({members?.length ?? 0})</h2>
@@ -708,6 +709,7 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
           </ul>
         )}
       </section>
+      </>)}
 
       {section === "home" && (<>
       <section className="space-y-3">
