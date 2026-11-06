@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -232,13 +232,22 @@ def create_project(
         workspace_access = get_workspace_access(db, user_id, workspace_id)
         if not workspace_access.can_administer:
             raise HTTPException(status_code=403, detail="Project creation denied")
+        # RLS note: INSERT ... RETURNING is checked against the projects
+        # SELECT policy, and can_read_project() cannot see the row being
+        # inserted (its STABLE snapshot predates this statement). Supplying
+        # the id and timestamps keeps this INSERT from needing RETURNING; the
+        # project is readable for the rest of the transaction afterwards.
+        now = datetime.now(UTC)
         project = Project(
+            id=uuid4(),
             workspace_id=workspace_id,
             name=name,
             description=description,
             status=status,
             progress_mode=progress_mode,
             manual_progress=manual_progress,
+            created_at=now,
+            updated_at=now,
         )
         db.add(project)
         db.flush()
