@@ -14,11 +14,13 @@ def test_schema_revision_follows_preserved_empty_baseline():
     config.set_main_option("script_location", str(backend_root / "alembic"))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "0003_lifecycle_hardening"
+    assert script.get_current_head() == "0004_enable_rls_and_policies"
     revision = script.get_revision("0002_mvp_schema")
     correction = script.get_revision("0003_lifecycle_hardening")
+    hardening = script.get_revision("0004_enable_rls_and_policies")
     assert revision.down_revision == "0001_empty_baseline"
     assert correction.down_revision == "0002_mvp_schema"
+    assert hardening.down_revision == "0003_lifecycle_hardening"
     assert script.get_revision("0001_empty_baseline") is not None
 
 

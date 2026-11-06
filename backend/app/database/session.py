@@ -59,6 +59,9 @@ def get_db(
     session = SessionLocal()
     session.info["supabase_jwt_claims"] = {
         "sub": str(current_user.user_id),
+        # Included so RLS helpers can match invitee email on invitation and
+        # profile rows; omitted entirely when the token has no email claim.
+        **({"email": current_user.email} if current_user.email else {}),
         "role": "authenticated",
         "aud": settings.supabase_jwt_audience,
     }
