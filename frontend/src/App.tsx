@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, X } from "lucide-react";
+import { AuthPanel } from "./components/AuthPanel";
+import { LandingPage } from "./components/LandingPage";
 import { KanbanPage } from "./modules/projects/pages/KanbanPage";
 import { MeetingsPage } from "./modules/projects/pages/MeetingsPage";
 import { ProjectOverviewPage } from "./modules/projects/pages/OverviewPage";
@@ -16,9 +18,36 @@ import { AppShell, type NotificationItem, type Scope } from "./components/AppShe
 import { Button } from "./components/ui";
 import { ProjectEditor, TaskEditor, MeetingEditor, ResourceEditor, type EditorState } from "./modules/projects/components/ProjectEditors";
 import { createId, isPastMeeting, isRecentlyUpdated, milestoneState, sortMeetingsByDate, sortMilestones, type AppData, type Invitation, type Meeting, type Membership, type Project, type Resource, type Task, type TaskStatus, type Workspace, type WorkspaceRole, useAppData } from "./model";
+import { useAuthActions, useAuthState } from "./lib/auth/AuthContext";
+import { useRealWorkspaces } from "./lib/real/useRealWorkspaces";
+import { RealWorkspaceHome } from "./components/RealWorkspaceHome";
+import { RealProjectsPage } from "./components/RealProjectsPage";
+import { RealProjectDetailPage } from "./components/RealProjectDetailPage";
+import { workspaceApi, type ApiWorkspace } from "./lib/api/workspace";
+import { friendlyError } from "./lib/api/client";
+
+const prototypeWorkspace = (source: ApiWorkspace): Workspace => ({
+  id: source.id,
+  name: source.name,
+  url: `asquii.com/${source.slug}`,
+  visibility: "private",
+  notifications: { taskAssignments: true, projectUpdates: true, upcomingDeadlines: true },
+});
 
 export default function App() {
   const { data, setData, storageError, clearStorageError } = useAppData();
+  const auth = useAuthState();
+  const authActions = useAuthActions();
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
+  /** Anonymous visitors see the landing first; the prototype demo is opt-in. */
+  const [demoMode, setDemoMode] = useState(false);
+  const [workspaceNotice, setWorkspaceNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+
+  const signedIn = auth.status === "authed";
+  const realWorkspaces = useRealWorkspaces(signedIn, authActions.getAccessToken);
+  const account = signedIn ? { name: auth.identity.displayName, email: auth.identity.email } : null;
+  const identityUserId = signedIn ? auth.identity.userId : "";
   const [scope, setScope] = useState<Scope>("workspace");
   const [active, setActive] = useState("Overview");
   const [workspaceId, setWorkspaceId] = useState(() => readLocal("asquii.active-workspace", "workspace-product"));
@@ -38,6 +67,16 @@ export default function App() {
     } catch { return []; }
   });
   const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
+  const [realProjectId, setRealProjectId] = useState<string | null>(null);
+  // Real project detail is a transient drill-down: navigating anywhere else or
+  // switching workspace closes it, so returning to Projects shows the list.
+  useEffect(() => {
+    setRealProjectId(null);
+  }, [active]);
+  const realWorkspaceSelectedId = realWorkspaces.selected?.id;
+  useEffect(() => {
+    setRealProjectId(null);
+  }, [realWorkspaceSelectedId]);
   const [theme, setTheme] = useState<"light" | "dark">(readTheme);
 
   const membership = data.memberships.find(item => item.workspaceId === workspaceId && item.personId === personaId);
@@ -55,7 +94,19 @@ export default function App() {
   const projectPeople = workspacePeople.filter(person => selectedProject?.personIds.includes(person.id));
   const projectData: AppData = { ...data, projects: selectedProject ? [selectedProject] : [], tasks: data.tasks.filter(task => task.projectId === selectedProject?.id), people: projectPeople };
 
+  // Signed-in display shim: the shell is driven by real API data while the
+  // prototype values stay untouched for demo mode. Real roles map onto the
+  // prototype's two-value role model (Member, or Admin for Owner/Admin).
+  const emptyWorkspace: Workspace = { id: "", name: "Workspace", url: "asquii.com", visibility: "private", notifications: { taskAssignments: true, projectUpdates: true, upcomingDeadlines: true } };
+  const displayWorkspace = signedIn ? (realWorkspaces.selected ? prototypeWorkspace(realWorkspaces.selected) : emptyWorkspace) : workspace;
+  const displayWorkspaces = signedIn ? realWorkspaces.workspaces.map(prototypeWorkspace) : visibleWorkspaces;
+  const displayRole: WorkspaceRole = signedIn ? (realWorkspaces.selected?.role === "Member" ? "Member" : realWorkspaces.selected ? "Admin" : "Member") : role;
+  const displayCanAdmin = signedIn ? displayRole === "Admin" : canAdmin;
+  const displayProjects = signedIn ? [] as Project[] : visibleProjects;
+  const displaySelectedProject = signedIn ? undefined : selectedProject;
+
   const notifications = useMemo<NotificationItem[]>(() => {
+    if (signedIn) return []; // Prototype-derived notifications stay in demo mode; real ones arrive with later slices.
     const prefs = workspace?.notifications ?? { taskAssignments: true, projectUpdates: true, upcomingDeadlines: true };
     const read = new Set(readIds);
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -103,6 +154,29 @@ export default function App() {
   useEffect(() => { document.documentElement.dataset.theme = theme; try { localStorage.setItem("asquii.theme", theme); } catch { /* Theme still applies for this session. */ } }, [theme]);
   useEffect(() => { try { localStorage.setItem("asquii.notifications-read", JSON.stringify(readIds)); } catch { /* Read state still applies for this session. */ } }, [readIds]);
   useEffect(() => { try { localStorage.setItem("asquii.recent-projects", JSON.stringify(recentIds)); } catch { /* Recent projects still apply for this session. */ } }, [recentIds]);
+
+  // Landing <-> demo history: entering the demo pushes an entry, so both the
+  // in-app "Back to landing" control and the browser Back/Forward buttons stay
+  // in sync. Anonymous only — signed-in app state is untouched.
+  useEffect(() => {
+    if (signedIn) {
+      if (window.location.hash === "#demo") {
+        window.history.replaceState({ asquiiView: "app" }, "", window.location.pathname + window.location.search);
+      }
+      return;
+    }
+    // Direct loads with a stale #demo hash land on the landing page.
+    if (window.location.hash === "#demo" || window.history.state?.asquiiView !== "landing") {
+      window.history.replaceState({ asquiiView: "landing" }, "", window.location.pathname + window.location.search);
+    }
+    const onPopState = (event: PopStateEvent) => {
+      const view = (event.state as { asquiiView?: string } | null)?.asquiiView;
+      setDemoMode(view === "demo");
+      if (view !== "demo") setActive("Overview");
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [signedIn]);
 
   const navigate = (item: string) => {
     if (item === "Workspace overview") { setScope("workspace"); setActive("Overview"); return; }
@@ -153,7 +227,26 @@ export default function App() {
   }) }));
   const deleteTask = (taskId: string) => setData(previous => ({ ...previous, tasks: previous.tasks.filter(task => task.id !== taskId) }));
   const saveSettings = (settings: Workspace) => { if (!canAdmin) return; setData(previous => ({ ...previous, workspaces: previous.workspaces.map(item => item.id === settings.id ? settings : item) })); };
-  const createWorkspace = (input: Omit<Workspace, "id">) => {
+  const createWorkspace = async (input: Omit<Workspace, "id">) => {
+    // Picker (WorkspaceEditor) works in both modes; signed-in creation goes
+    // to the real API while demo mode keeps modifying prototype data only.
+    if (signedIn) {
+      try {
+        const token = await authActions.getAccessToken();
+        if (!token) {
+          setWorkspaceNotice({ tone: "error", text: "Sign-in session ended. Please sign in again." });
+          return;
+        }
+        const created = await workspaceApi.createWorkspace(token, input.name);
+        realWorkspaces.applyWorkspace(created);
+        setWorkspaceNotice({ tone: "success", text: `Workspace "${created.name}" is live — you are its Owner.` });
+        setWorkspaceEditorOpen(false);
+      } catch (error) {
+        const friendly = friendlyError(error, "Could not create workspace");
+        setWorkspaceNotice({ tone: "error", text: `${friendly.title}: ${friendly.message}` });
+      }
+      return;
+    }
     const created: Workspace = { ...input, id: createId("workspace") };
     setData(previous => ({ ...previous, workspaces: [...previous.workspaces, created], memberships: [...previous.memberships, { workspaceId: created.id, personId: personaId, role: "Admin" }] }));
     setWorkspaceId(created.id); setProjectId(""); setScope("workspace"); setActive("Overview"); setWorkspaceEditorOpen(false);
@@ -222,18 +315,82 @@ export default function App() {
   const openEditResource = (resourceId: string) => setEditor({ kind: "resource", id: resourceId });
 
   const isPeoplePage = active === "People" || (scope === "project" && (active === "Resources" || active === "Meetings" || active === "Tasks" || active === "Kanban"));
-  return <AppShell scope={scope} active={active} onNavigate={navigate} workspace={workspace} workspaces={visibleWorkspaces} projects={visibleProjects} project={selectedProject} tasks={workspaceTasks} people={data.people} personaId={personaId} role={role} canAdmin={canAdmin} notifications={notifications} onSelectWorkspace={selectWorkspace} onSelectProject={selectProject} onSelectPersona={setPersonaId} onCreateWorkspace={() => setWorkspaceEditorOpen(true)} onOpenProjectPage={openProjectPage} onReadNotification={markNotificationRead} onMarkAllNotificationsRead={markAllNotificationsRead} recentProjectIds={recentIds} onCreateProject={canAdmin ? openCreateProject : undefined} onCreateTask={selectedProject ? () => openCreateTask() : undefined} onCreateMeeting={selectedProject ? openCreateMeeting : undefined} onCreateResource={selectedProject ? openCreateResource : undefined} onQuickCreate={openQuickCreate} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")}>
+  const handleSignOut = async () => {
+    await authActions.signOut();
+    setWorkspaceNotice(null);
+    // Anonymous home is the landing again; the demo stays opt-in per session.
+    setDemoMode(false);
+    setActive("Overview");
+  };
+  const showLanding = !signedIn && !demoMode && active === "Overview";
+  const openSignIn = () => { setAuthMode("sign-in"); setAuthOpen(true); };
+  const openSignUp = () => { setAuthMode("sign-up"); setAuthOpen(true); };
+  const exploreDemo = () => {
+    window.history.pushState({ asquiiView: "demo" }, "", "#demo");
+    setDemoMode(true);
+    setActive("Overview");
+  };
+  const exitDemo = () => {
+    // Prefer the real history stack so browser Back/Forward stays coherent.
+    if (window.history.state?.asquiiView === "demo") {
+      window.history.back();
+    } else {
+      setDemoMode(false);
+      setActive("Overview");
+    }
+  };
+  const invitePending = !signedIn && new URLSearchParams(window.location.search).has("invite");
+
+  return <>
+    {showLanding ? (
+      <div className="min-h-screen bg-page text-heading">
+        {auth.status === "error" && (
+          <div role="alert" className="ui-error-banner mx-auto mt-4 max-w-6xl !items-center">
+            <span className="flex-1">{auth.message}</span>
+            <button className="ui-button ui-button-secondary ui-button-sm shrink-0" onClick={authActions.retry}>Retry</button>
+          </div>
+        )}
+        <LandingPage
+          theme={theme}
+          onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")}
+          onSignIn={openSignIn}
+          onSignUp={openSignUp}
+          onExploreDemo={exploreDemo}
+          invitePending={invitePending}
+        />
+      </div>
+    ) : (
+    <AppShell scope={signedIn ? "workspace" : scope} active={signedIn && active !== "Projects" ? "Overview" : active} onNavigate={navigate} workspace={displayWorkspace} workspaces={displayWorkspaces} projects={displayProjects} project={displaySelectedProject} tasks={workspaceTasks} people={data.people} personaId={personaId} role={displayRole} canAdmin={displayCanAdmin} notifications={notifications} onSelectWorkspace={selectWorkspace} onSelectProject={selectProject} onSelectPersona={setPersonaId} onCreateWorkspace={() => setWorkspaceEditorOpen(true)} onOpenProjectPage={openProjectPage} onReadNotification={markNotificationRead} onMarkAllNotificationsRead={markAllNotificationsRead} recentProjectIds={recentIds} onCreateProject={!signedIn && displayCanAdmin ? openCreateProject : undefined} onCreateTask={!signedIn && selectedProject ? () => openCreateTask() : undefined} onCreateMeeting={!signedIn && selectedProject ? openCreateMeeting : undefined} onCreateResource={!signedIn && selectedProject ? openCreateResource : undefined} onQuickCreate={!signedIn ? openQuickCreate : undefined} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} account={account} onShowSignIn={openSignIn} onSignOut={() => void handleSignOut()} onBackToLanding={!signedIn && demoMode ? exitDemo : undefined}>
     {storageError && <div role="alert" className="ui-error-banner mb-5"><span className="flex-1">{storageError}</span><button className="icon-button -my-1 text-danger" aria-label="Dismiss message" onClick={clearStorageError}><X size={15} /></button></div>}
-    {!isPeoplePage && active !== "Overview" && !(scope === "project" && active === "Settings") && !(scope === "workspace" && active === "Projects") && <div className="mb-5 flex flex-wrap items-end justify-between gap-3 sm:mb-6"><div><h1 className="mobile-page-title text-2xl font-semibold tracking-tight">{pageTitle}</h1><p className="mt-1.5 text-sm text-muted">{description(scope, active, role)}</p></div>{action && <Button variant="primary" icon={<Plus size={15} />} onClick={scope === "workspace" ? openCreateProject : () => openCreateTask()}>{action}</Button>}</div>}
-    {scope === "workspace"
-      ? <WorkspaceRoute active={active} data={scopedWorkspaceData} workspace={workspace} memberships={workspaceMemberships} invitations={data.invitations.filter(item => item.workspaceId === workspace.id)} canAdmin={canAdmin} role={role} personaId={personaId} onOpenProject={selectProject} onEditProject={id => canAdmin && setEditor({ kind: "project", id })} onCreateProject={openCreateProject} onImportProjects={importProjects} onSaveSettings={saveSettings} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} onViewProjects={() => navigate("Projects")} onViewPeople={() => navigate("People")} onInvite={createInvite} onRoleChange={updateMemberRole} onAcceptInvite={acceptInvite} onRevokeInvite={revokeInvite} />
-      : <ProjectRoute active={active} project={selectedProject} data={projectData} canAdmin={canAdmin} personaId={personaId} onNavigate={navigate} onEditProject={id => canAdmin && setEditor({ kind: "project", id })} onEditTask={id => setEditor({ kind: "task", id })} onCreateTask={openCreateTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTask={reorderTask} onCreateMeeting={openCreateMeeting} onEditMeeting={openEditMeeting} onDeleteMeeting={deleteMeeting} onCreateResource={openCreateResource} onEditResource={openEditResource} onDeleteResource={deleteResource} onRestoreResource={restoreResource} onPurgeResource={purgeResource} onStarResource={starResource} onUploadResource={uploadResource} onSaveSettings={saveSettings} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} />}
-    {editor?.kind === "project" && canAdmin && <ProjectEditor project={editor.id ? data.projects.find(project => project.id === editor.id && project.workspaceId === workspace.id) : undefined} workspaceId={workspace.id} projects={data.projects.filter(project => project.workspaceId === workspace.id)} people={workspacePeople} onClose={() => setEditor(null)} onSave={saveProject} />}
-    {editor?.kind === "task" && selectedProject && <TaskEditor task={editor.id ? data.tasks.find(task => task.id === editor.id && task.projectId === selectedProject.id) : undefined} projectId={editor.projectId ?? selectedProject.id} initialStatus={editor.status} projects={[selectedProject]} people={projectPeople} personaId={personaId} onClose={() => setEditor(null)} onSave={saveTask} />}
-    {editor?.kind === "meeting" && selectedProject && <MeetingEditor meeting={editor.id ? data.meetings.find(meeting => meeting.id === editor.id && meeting.projectId === selectedProject.id) : undefined} projectId={selectedProject.id} projects={[selectedProject]} people={projectPeople} onClose={() => setEditor(null)} onSave={saveMeeting} />}
-    {editor?.kind === "resource" && selectedProject && <ResourceEditor resource={editor.id ? data.resources.find(resource => resource.id === editor.id && resource.projectId === selectedProject.id) : undefined} initialType={editor.type} projectId={selectedProject.id} people={projectPeople} onClose={() => setEditor(null)} onSave={saveResource} />}
+    {auth.status === "error" && (
+      <div role="alert" className="ui-error-banner mb-5 !items-center">
+        <span className="flex-1">{auth.message}</span>
+        <button className="ui-button ui-button-secondary ui-button-sm shrink-0" onClick={authActions.retry}>Retry</button>
+      </div>
+    )}
+    {signedIn ? <>
+        {workspaceNotice && <div role="status" className={`mb-5 rounded-xl border border-line px-4 py-3 text-xs font-medium ${workspaceNotice.tone === "success" ? "bg-brand-soft text-brand" : "bg-danger-soft text-danger"}`}>{workspaceNotice.text}</div>}
+        {active === "Projects"
+          ? (realProjectId
+            ? <RealProjectDetailPage workspaceState={realWorkspaces} projectId={realProjectId} getAccessToken={authActions.getAccessToken} identityUserId={identityUserId} onBack={() => setRealProjectId(null)} />
+            : <RealProjectsPage workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} onOpenProject={setRealProjectId} />)
+          : <RealWorkspaceHome workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} identityUserId={identityUserId} onOpenProject={id => { setRealProjectId(id); navigate("Projects"); }} />}
+      </>
+      : <>
+        {!isPeoplePage && active !== "Overview" && !(scope === "project" && active === "Settings") && !(scope === "workspace" && active === "Projects") && <div className="mb-5 flex flex-wrap items-end justify-between gap-3 sm:mb-6"><div><h1 className="mobile-page-title text-2xl font-semibold tracking-tight">{pageTitle}</h1><p className="mt-1.5 text-sm text-muted">{description(scope, active, role)}</p></div>{action && <Button variant="primary" icon={<Plus size={15} />} onClick={scope === "workspace" ? openCreateProject : () => openCreateTask()}>{action}</Button>}</div>}
+        {scope === "workspace"
+          ? <WorkspaceRoute active={active} data={scopedWorkspaceData} workspace={workspace} memberships={workspaceMemberships} invitations={data.invitations.filter(item => item.workspaceId === workspace.id)} canAdmin={canAdmin} role={role} personaId={personaId} onOpenProject={selectProject} onEditProject={id => canAdmin && setEditor({ kind: "project", id })} onCreateProject={openCreateProject} onImportProjects={importProjects} onSaveSettings={saveSettings} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} onViewProjects={() => navigate("Projects")} onViewPeople={() => navigate("People")} onInvite={createInvite} onRoleChange={updateMemberRole} onAcceptInvite={acceptInvite} onRevokeInvite={revokeInvite} />
+          : <ProjectRoute active={active} project={selectedProject} data={projectData} canAdmin={canAdmin} personaId={personaId} onNavigate={navigate} onEditProject={id => canAdmin && setEditor({ kind: "project", id })} onEditTask={id => setEditor({ kind: "task", id })} onCreateTask={openCreateTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTask={reorderTask} onCreateMeeting={openCreateMeeting} onEditMeeting={openEditMeeting} onDeleteMeeting={deleteMeeting} onCreateResource={openCreateResource} onEditResource={openEditResource} onDeleteResource={deleteResource} onRestoreResource={restoreResource} onPurgeResource={purgeResource} onStarResource={starResource} onUploadResource={uploadResource} onSaveSettings={saveSettings} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} />}
+        {editor?.kind === "project" && canAdmin && <ProjectEditor project={editor.id ? data.projects.find(project => project.id === editor.id && project.workspaceId === workspace.id) : undefined} workspaceId={workspace.id} projects={data.projects.filter(project => project.workspaceId === workspace.id)} people={workspacePeople} onClose={() => setEditor(null)} onSave={saveProject} />}
+        {editor?.kind === "task" && selectedProject && <TaskEditor task={editor.id ? data.tasks.find(task => task.id === editor.id && task.projectId === selectedProject.id) : undefined} projectId={editor.projectId ?? selectedProject.id} initialStatus={editor.status} projects={[selectedProject]} people={projectPeople} personaId={personaId} onClose={() => setEditor(null)} onSave={saveTask} />}
+        {editor?.kind === "meeting" && selectedProject && <MeetingEditor meeting={editor.id ? data.meetings.find(meeting => meeting.id === editor.id && meeting.projectId === selectedProject.id) : undefined} projectId={selectedProject.id} projects={[selectedProject]} people={projectPeople} onClose={() => setEditor(null)} onSave={saveMeeting} />}
+        {editor?.kind === "resource" && selectedProject && <ResourceEditor resource={editor.id ? data.resources.find(resource => resource.id === editor.id && resource.projectId === selectedProject.id) : undefined} initialType={editor.type} projectId={selectedProject.id} people={projectPeople} onClose={() => setEditor(null)} onSave={saveResource} />}
+      </>}
     {workspaceEditorOpen && <WorkspaceEditor onClose={() => setWorkspaceEditorOpen(false)} onSave={createWorkspace} />}
-  </AppShell>;
+    </AppShell>
+    )}
+    <AuthPanel open={authOpen} initialMode={authMode} onClose={() => setAuthOpen(false)} />
+  </>;
 }
 
 function WorkspaceRoute({ active, data, workspace, memberships, invitations, canAdmin, role, personaId, onOpenProject, onEditProject, onCreateProject, onImportProjects, onSaveSettings, theme, onToggleTheme, onViewProjects, onViewPeople, onInvite, onRoleChange, onAcceptInvite, onRevokeInvite }: { active: string; data: AppData; workspace: Workspace; memberships: Membership[]; invitations: Invitation[]; canAdmin: boolean; role: WorkspaceRole; personaId: string; onOpenProject: (id: string) => void; onEditProject: (id: string) => void; onCreateProject: () => void; onImportProjects: (projects: ImportedProject[]) => void; onSaveSettings: (settings: Workspace) => void; theme: "light" | "dark"; onToggleTheme: () => void; onViewProjects: () => void; onViewPeople: () => void; onInvite: (email: string, role: WorkspaceRole) => boolean; onRoleChange: (personId: string, role: WorkspaceRole) => void; onAcceptInvite: (id: string) => void; onRevokeInvite: (id: string) => void }) {

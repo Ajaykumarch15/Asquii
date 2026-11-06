@@ -31,6 +31,7 @@ def test_session_commits_and_closes(monkeypatch):
     assert next(generator) is fake
     assert fake.info["supabase_jwt_claims"] == {
         "sub": str(user.user_id),
+        "email": user.email,
         "role": "authenticated",
         "aud": session.settings.supabase_jwt_audience,
     }
