@@ -138,6 +138,19 @@ export interface ProjectsApi {
     attendee_user_ids?: string[];
   }): Promise<ApiMeeting>;
   deleteMeeting(accessToken: string, workspaceId: string, projectId: string, meetingId: string): Promise<void>;
+  /**
+   * PATCH with any non-null subset of fields; the backend rejects an empty
+   * patch (422) and nulls. Update is meeting-manager-only server-side
+   * (`can_manage_settings`: Project Manager OR workspace Owner/Admin).
+   */
+  updateMeeting(accessToken: string, workspaceId: string, projectId: string, meetingId: string, patch: {
+    title?: string;
+    description?: string;
+    starts_at?: string;
+    duration_minutes?: number;
+    meeting_type?: ApiMeetingType;
+    agenda?: string;
+  }): Promise<ApiMeeting>;
   listAttendees(accessToken: string, workspaceId: string, projectId: string, meetingId: string): Promise<ApiMeetingAttendee[]>;
   /** 201 with the attendee row; the backend rejects duplicates (409) and non-members (422). */
   addAttendee(accessToken: string, workspaceId: string, projectId: string, meetingId: string, userId: string): Promise<ApiMeetingAttendee>;
@@ -347,6 +360,9 @@ export const projectsApi: ProjectsApi = {
   },
   async deleteMeeting(accessToken: string, workspaceId: string, projectId: string, meetingId: string) {
     return apiDelete(`/workspaces/${workspaceId}/projects/${projectId}/meetings/${meetingId}`, accessToken);
+  },
+  async updateMeeting(accessToken: string, workspaceId: string, projectId: string, meetingId: string, patch) {
+    return apiPatch<ApiMeeting>(`/workspaces/${workspaceId}/projects/${projectId}/meetings/${meetingId}`, patch, accessToken);
   },
   async listAttendees(accessToken: string, workspaceId: string, projectId: string, meetingId: string) {
     return apiGet<ApiMeetingAttendee[]>(`/workspaces/${workspaceId}/projects/${projectId}/meetings/${meetingId}/attendees`, accessToken);

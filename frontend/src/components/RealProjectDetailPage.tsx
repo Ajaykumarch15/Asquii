@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState, type FormEvent } from "react";
-import { ArrowLeft, Loader2, Plus, Trash2, UserPlus, UserMinus, Users } from "lucide-react";
+import { ArrowLeft, Loader2, Pencil, Plus, Trash2, UserPlus, UserMinus, Users } from "lucide-react";
 import {
   Badge,
   Button,
@@ -665,6 +665,14 @@ function formatDateTime(value: string): string {
     : parsed.toLocaleString("en", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+/** Convert a UTC instant to the `datetime-local` input format in local time. */
+function toLocalInput(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+}
+
 function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, canManageMeetings, archived, identityUserId, getAccessToken, onNotice, onError }: {
   workspaceId: string;
   projectId: string;
@@ -687,8 +695,11 @@ function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, canMan
   const [startAt, setStartAt] = useState("");
   const [duration, setDuration] = useState(60);
   const [meetingType, setMeetingType] = useState<ApiMeetingType>("Team sync");
+  const [agenda, setAgenda] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  /** Meeting currently being edited; null means the open form creates. */
+  const [editId, setEditId] = useState<string | null>(null);
   // Attendee management: loaded lazily per meeting on first expand.
   const [expandedMeetingId, setExpandedMeetingId] = useState<string | null>(null);
   const [attendeesByMeeting, setAttendeesByMeeting] = useState<Record<string, ApiMeetingAttendee[]>>({});
@@ -811,7 +822,30 @@ function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, canMan
     }
   }
 
-  async function submitCreate(event: FormEvent) {
+  function startEdit(meeting: ApiMeeting) {
+    setTitle(meeting.title);
+    setDescription(meeting.description);
+    setStartAt(toLocalInput(meeting.starts_at));
+    setDuration(meeting.duration_minutes);
+    setMeetingType(meeting.meeting_type);
+    setAgenda(meeting.agenda);
+    setEditId(meeting.id);
+    setFormError(null);
+    setFormOpen(true);
+  }
+
+  function resetForm() {
+    setTitle("");
+    setDescription("");
+    setStartAt("");
+    setDuration(60);
+    setMeetingType("Team sync");
+    setAgenda("");
+    setEditId(null);
+    setFormError(null);
+  }
+
+  async function submitMeetingForm(event: FormEvent) {
     event.preventDefault();
     setSubmitting(true);
     setFormError(null);
@@ -826,21 +860,53 @@ function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, canMan
         setFormError("Pick a start date and time.");
         return;
       }
-      const created = await projectsApi.createMeeting(token, workspaceId, projectId, {
-        title: title.trim(),
-        description: description.trim(),
-        starts_at: starts.toISOString(),
-        duration_minutes: duration,
-        meeting_type: meetingType,
-      });
-      setMeetings(previous => [...previous, created]);
-      onNotice(`Meeting "${created.title}" scheduled.`);
-      setTitle("");
-      setDescription("");
-      setStartAt("");
+      if (editId !== null) {
+        // PATCH contract: any non-null subset of fields; only changed fields
+        // are sent so unrelated manager notes never trigger `meeting.updated`.
+        const meeting = meetings.find(item => item.id === editId);
+        if (!meeting) {
+          setFormError("This meeting no longer exists.");
+          return;
+        }
+        const patch: {
+          title?: string;
+          description?: string;
+          starts_at?: string;
+          duration_minutes?: number;
+          meeting_type?: ApiMeetingType;
+          agenda?: string;
+        } = {};
+        if (title.trim() !== meeting.title) patch.title = title.trim();
+        if (description.trim() !== meeting.description) patch.description = description.trim();
+        if (starts.toISOString() !== meeting.starts_at) patch.starts_at = starts.toISOString();
+        if (duration !== meeting.duration_minutes) patch.duration_minutes = duration;
+        if (meetingType !== meeting.meeting_type) patch.meeting_type = meetingType;
+        if (agenda.trim() !== meeting.agenda) patch.agenda = agenda.trim();
+        if (Object.keys(patch).length === 0) {
+          onNotice("");
+          resetForm();
+          setFormOpen(false);
+          return;
+        }
+        const updated = await projectsApi.updateMeeting(token, workspaceId, projectId, editId, patch);
+        setMeetings(previous => previous.map(item => (item.id === updated.id ? updated : item)));
+        onNotice(`Meeting "${updated.title}" updated.`);
+      } else {
+        const created = await projectsApi.createMeeting(token, workspaceId, projectId, {
+          title: title.trim(),
+          description: description.trim(),
+          starts_at: starts.toISOString(),
+          duration_minutes: duration,
+          meeting_type: meetingType,
+          agenda: agenda.trim(),
+        });
+        setMeetings(previous => [...previous, created]);
+        onNotice(`Meeting "${created.title}" scheduled.`);
+      }
+      resetForm();
       setFormOpen(false);
     } catch (error) {
-      const friendly = friendlyError(error, "Could not schedule meeting");
+      const friendly = friendlyError(error, editId !== null ? "Could not update meeting" : "Could not schedule meeting");
       setFormError(`${friendly.title}: ${friendly.message}`);
     } finally {
       setSubmitting(false);
@@ -850,6 +916,7 @@ function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, canMan
   async function removeMeeting(meeting: ApiMeeting) {
     if (!window.confirm(`Delete meeting "${meeting.title}"?`)) return;
     setMeetings(previous => previous.filter(item => item.id !== meeting.id));
+    if (editId === meeting.id) resetForm();
     setAttendeesByMeeting(state => {
       const next = { ...state };
       delete next[meeting.id];
@@ -873,14 +940,15 @@ function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, canMan
     <div className="space-y-3">
       <div className="flex justify-end">
         {isCollaborator && !archived && (
-          <Button variant="primary" size="sm" icon={<Plus size={14} />} onClick={() => { setFormOpen(open => !open); onNotice(""); }}>
+          <Button variant="primary" size="sm" icon={<Plus size={14} />} onClick={() => { if (formOpen) { setFormOpen(false); } else { resetForm(); setFormOpen(true); } onNotice(""); }}>
             {formOpen ? "Cancel" : "Schedule meeting"}
           </Button>
         )}
       </div>
 
       {formOpen && isCollaborator && !archived && (
-        <form onSubmit={submitCreate} className="space-y-3 rounded-xl border border-line bg-surface p-4">
+        <form onSubmit={submitMeetingForm} className="space-y-3 rounded-xl border border-line bg-surface p-4">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-muted">{editId !== null ? "Editing meeting" : "New meeting"}</p>
           <TextInput label="Title" required maxLength={200} value={title} onChange={event => setTitle(event.target.value)} placeholder="Weekly review" />
           <label className="block space-y-1.5">
             <span className="ui-label">Starts at</span>
@@ -895,10 +963,11 @@ function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, canMan
               <input type="number" min={1} max={1440} required className="ui-input" value={duration} onChange={event => setDuration(Number(event.target.value) || 0)} />
             </label>
           </div>
-          <Textarea label="Description" rows={2} maxLength={20000} value={description} onChange={event => setDescription(event.target.value)} placeholder="Optional notes for attendees (agenda/editing arrive later)" />
+          <Textarea label="Description" rows={2} maxLength={20000} value={description} onChange={event => setDescription(event.target.value)} placeholder="Optional notes for attendees" />
+          <Textarea label="Agenda" rows={3} maxLength={20000} value={agenda} onChange={event => setAgenda(event.target.value)} placeholder="Optional structured agenda — shown on the meeting record" />
           {formError && <p className="text-xs text-danger">{formError}</p>}
-          <Button type="submit" variant="primary" size="sm" disabled={submitting} icon={submitting ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}>
-            {submitting ? "Scheduling…" : "Schedule meeting"}
+          <Button type="submit" variant="primary" size="sm" disabled={submitting} icon={submitting ? <Loader2 size={14} className="animate-spin" /> : (editId !== null ? <Pencil size={14} /> : <Plus size={14} />)}>
+            {submitting ? (editId !== null ? "Saving…" : "Scheduling…") : (editId !== null ? "Save changes" : "Schedule meeting")}
           </Button>
         </form>
       )}
@@ -934,9 +1003,16 @@ function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, canMan
                       {meeting.organizer_display_name && <span>Organizer: {meeting.organizer_display_name}</span>}
                     </p>
                   </div>
-                  <Button variant="ghost" size="sm" icon={<Trash2 size={14} />} aria-label={`Delete ${meeting.title}`} onClick={() => void removeMeeting(meeting)}>
-                    Delete
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    {canManageMeetings && !archived && (
+                      <Button variant="ghost" size="sm" icon={<Pencil size={13} />} aria-label={`Edit ${meeting.title}`} disabled={busyAttendeeKey !== null} onClick={() => { startEdit(meeting); onNotice(""); }}>
+                        Edit
+                      </Button>
+                    )}
+                    <Button variant="ghost" size="sm" icon={<Trash2 size={14} />} aria-label={`Delete ${meeting.title}`} onClick={() => void removeMeeting(meeting)}>
+                      Delete
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="mt-2">
