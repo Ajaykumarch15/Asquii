@@ -9,13 +9,21 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Activity as ActivityIcon, Archive, BriefcaseBusiness, Copy, Loader2, Pencil, Plus, Trash2, Users } from "lucide-react";
-import { Badge, Button, EmptyState, ErrorState, LoadingState, Select, TextInput } from "./ui";
+import { Badge, Button, EmptyState, ErrorState, LoadingState, Select, Textarea, TextInput } from "./ui";
 import { friendlyError } from "../lib/api/client";
 import { activitiesApi, activityText, type ApiActivity } from "../lib/api/activities";
+import {
+  projectsApi,
+  type ApiProject,
+  type ApiProjectStatus,
+  type ApiProgressMode,
+} from "../lib/api/projects";
 import { workspaceApi, type ApiInvitation, type ApiWorkspace, type ApiWorkspaceMember, type EditableWorkspaceRole } from "../lib/api/workspace";
 import type { WorkspaceState } from "../lib/real/useRealWorkspaces";
 
 const roleBadgeTone = { Owner: "brand", Admin: "warning", Member: "neutral" } as const;
+const projectStatusTone = { "In progress": "brand", "In review": "warning", Complete: "success" } as const;
+const PROJECT_STATUSES: ApiProjectStatus[] = ["In progress", "In review", "Complete"];
 const inviteStatusTone: Record<ApiInvitation["status"], "warning" | "success" | "neutral" | "danger"> = {
   pending: "warning",
   accepted: "success",
@@ -44,11 +52,13 @@ function shortDateTime(value: string): string {
 /** Feed page size: one screen of events plus explicit "Load more" paging. */
 const ACTIVITY_PAGE_SIZE = 8;
 
-export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUserId }: {
+export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUserId, onOpenProject }: {
   workspaceState: WorkspaceState;
   getAccessToken: () => Promise<string | null>;
   /** Signed-in user's id; used to distinguish "Leave" from "Remove" in the people list. */
   identityUserId: string;
+  /** Drill into a project from the home overview (switches to the Projects route). */
+  onOpenProject: (projectId: string) => void;
 }) {
   const [members, setMembers] = useState<ApiWorkspaceMember[] | null>(null);
   const [membersState, setMembersState] = useState<"loading" | "ready" | "error">("loading");
@@ -77,6 +87,18 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
   const [activityTotal, setActivityTotal] = useState(0);
   const [activityState, setActivityState] = useState<"loading" | "ready" | "error">("loading");
   const [activityLoadingMore, setActivityLoadingMore] = useState(false);
+  // Projects: real list + Owner/Admin creation form (backend gates creation to
+  // workspace Owner/Admin and makes the creator Project Manager).
+  const [projects, setProjects] = useState<ApiProject[] | null>(null);
+  const [projectsState, setProjectsState] = useState<"loading" | "ready" | "error">("loading");
+  const [projectFormOpen, setProjectFormOpen] = useState(false);
+  const [projectName, setProjectName] = useState("");
+  const [projectDescription, setProjectDescription] = useState("");
+  const [projectStatus, setProjectStatus] = useState<ApiProjectStatus>("In progress");
+  const [projectProgressMode, setProjectProgressMode] = useState<ApiProgressMode>("auto");
+  const [projectManualProgress, setProjectManualProgress] = useState(0);
+  const [projectSubmitting, setProjectSubmitting] = useState(false);
+  const [projectFormError, setProjectFormError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!workspaceState.selected) return;
@@ -87,6 +109,7 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
     setInvitationsState("loading");
     setActivityState("loading");
     setActivities(null);
+    setProjectsState(previous => (previous === "ready" ? previous : "loading"));
 
     void (async () => {
       const token = await getAccessToken();
@@ -109,6 +132,17 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
         const friendly = friendlyError(error, "Could not load invitations");
         setInvitationsState("error");
         setNotice({ tone: "error", text: `Invitations unavailable: ${friendly.message}` });
+      }
+      try {
+        const rows = await projectsApi.listProjects(token, workspaceId, { limit: 50 });
+        if (disposed) return;
+        setProjects(rows);
+        setProjectsState("ready");
+      } catch (error) {
+        if (disposed) return;
+        const friendly = friendlyError(error, "Could not load projects");
+        setProjectsState("error");
+        setNotice({ tone: "error", text: `Projects unavailable: ${friendly.message}` });
       }
       try {
         const page = await activitiesApi.listWorkspaceActivities(token, workspaceId, { limit: ACTIVITY_PAGE_SIZE });
@@ -318,6 +352,50 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
       setArchiving(false);
     }
   }
+
+  async function submitCreateProject(event: FormEvent) {
+    event.preventDefault();
+    if (!workspace) return;
+    setProjectSubmitting(true);
+    setProjectFormError(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        setProjectFormError("Sign-in session ended. Please sign in again.");
+        return;
+      }
+      const created = await projectsApi.createProject(token, workspace.id, {
+        name: projectName.trim(),
+        description: projectDescription.trim(),
+        status: projectStatus,
+        progress_mode: projectProgressMode,
+        manual_progress: projectProgressMode === "manual" ? projectManualProgress : undefined,
+      });
+      setProjects(previous => [...(previous ?? []), created]);
+      setNotice({ tone: "success", text: `Project "${created.name}" created — you are its Project Manager.` });
+      setProjectName("");
+      setProjectDescription("");
+      setProjectStatus("In progress");
+      setProjectProgressMode("auto");
+      setProjectManualProgress(0);
+      setProjectFormOpen(false);
+      setReloadToken(value => value + 1); // refresh the activity feed too
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not create the project");
+      setProjectFormError(`${friendly.title}: ${friendly.message}`);
+    } finally {
+      setProjectSubmitting(false);
+    }
+  }
+
+  // Project rows belong to one workspace; drop them on switch so another
+  // workspace's list never flashes while the new fetch is in flight.
+  useEffect(() => {
+    setProjects(null);
+    setProjectsState("loading");
+    setProjectFormOpen(false);
+    setProjectFormError(null);
+  }, [workspaceState.selected?.id]);
 
   // Keep the rename field aligned with the currently selected workspace.
   useEffect(() => {
@@ -628,11 +706,105 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-heading">Projects</h2>
-        <EmptyState
-          title="No projects yet"
-          description={isAdmin ? "Create the first project from the Projects page in the sidebar." : "A workspace Owner or Admin sets up projects."}
-        />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-heading">Projects{projectsState === "ready" && projects ? ` (${projects.length})` : ""}</h2>
+          {isAdmin && (
+            <Button
+              size="sm"
+              icon={<Plus size={14} />}
+              onClick={() => { setProjectFormOpen(open => !open); setProjectFormError(null); }}
+            >
+              {projectFormOpen ? "Cancel" : "New project"}
+            </Button>
+          )}
+        </div>
+
+        {projectFormOpen && isAdmin && (
+          <form onSubmit={submitCreateProject} className="space-y-3 rounded-xl border border-line bg-surface p-4">
+            <TextInput
+              label="Project name"
+              required
+              maxLength={160}
+              value={projectName}
+              onChange={event => setProjectName(event.target.value)}
+              placeholder="Website redesign"
+            />
+            <Textarea
+              label="Description"
+              rows={2}
+              maxLength={5000}
+              value={projectDescription}
+              onChange={event => setProjectDescription(event.target.value)}
+              placeholder="Optional summary of the project's goal"
+            />
+            <div className="flex flex-wrap gap-3">
+              <Select label="Status" className="w-40" value={projectStatus} onChange={event => setProjectStatus(event.target.value as ApiProjectStatus)}>
+                {PROJECT_STATUSES.map(option => <option key={option} value={option}>{option}</option>)}
+              </Select>
+              <Select label="Progress" className="w-44" value={projectProgressMode} onChange={event => setProjectProgressMode(event.target.value as ApiProgressMode)}>
+                <option value="auto">Automatic (from tasks)</option>
+                <option value="manual">Manual</option>
+              </Select>
+              {projectProgressMode === "manual" && (
+                <label className="block w-36 space-y-1.5">
+                  <span className="ui-label">Manual progress (%)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    className="ui-input"
+                    value={projectManualProgress}
+                    onChange={event => setProjectManualProgress(Math.max(0, Math.min(100, Number(event.target.value) || 0)))}
+                  />
+                </label>
+              )}
+            </div>
+            {projectFormError && <p className="text-xs text-danger">{projectFormError}</p>}
+            <Button type="submit" variant="primary" size="sm" disabled={projectSubmitting} icon={projectSubmitting ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}>
+              {projectSubmitting ? "Creating…" : "Create project"}
+            </Button>
+          </form>
+        )}
+
+        {projectsState === "loading" && <LoadingState label="Loading projects" />}
+        {projectsState === "error" && (
+          <ErrorState
+            title="Projects could not be loaded"
+            description="The project list is temporarily unavailable."
+            action={<Button onClick={() => setReloadToken(token => token + 1)}>Retry</Button>}
+          />
+        )}
+        {projectsState === "ready" && projects?.length === 0 && (
+          <EmptyState
+            title="No projects yet"
+            description={isAdmin ? "Create the first project with New project above — you become its Project Manager." : "A workspace Owner or Admin sets up projects."}
+          />
+        )}
+        {projectsState === "ready" && projects && projects.length > 0 && (
+          <ul className="divide-y divide-line rounded-xl border border-line bg-surface">
+            {projects.map(project => (
+              <li key={project.id} className="flex flex-wrap items-center gap-3 p-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="truncate text-xs font-semibold text-heading">{project.name}</p>
+                    <Badge tone={projectStatusTone[project.status]}>{project.status}</Badge>
+                    {project.archived_at && <Badge tone="danger">Archived</Badge>}
+                    {project.current_user_role && <Badge tone="neutral">{project.current_user_role}</Badge>}
+                  </div>
+                  {project.description && <p className="mt-0.5 line-clamp-1 text-[10px] text-muted">{project.description}</p>}
+                  <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
+                    <span>{project.member_count} member{project.member_count === 1 ? "" : "s"}</span>
+                    <span>Updated {shortDate(project.updated_at)}</span>
+                    {project.progress_mode === "manual" && project.manual_progress !== null && <span>{project.manual_progress}% manual progress</span>}
+                  </p>
+                </div>
+                <Button size="sm" aria-label={`Open project ${project.name}`} onClick={() => onOpenProject(project.id)}>
+                  Open
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section className="space-y-3">
