@@ -8,9 +8,10 @@
  */
 
 import { useEffect, useState, type FormEvent } from "react";
-import { Archive, BriefcaseBusiness, Copy, Loader2, Pencil, Plus, Trash2, Users } from "lucide-react";
+import { Activity as ActivityIcon, Archive, BriefcaseBusiness, Copy, Loader2, Pencil, Plus, Trash2, Users } from "lucide-react";
 import { Badge, Button, EmptyState, ErrorState, LoadingState, Select, TextInput } from "./ui";
 import { friendlyError } from "../lib/api/client";
+import { activitiesApi, activityText, type ApiActivity } from "../lib/api/activities";
 import { workspaceApi, type ApiInvitation, type ApiWorkspace, type ApiWorkspaceMember, type EditableWorkspaceRole } from "../lib/api/workspace";
 import type { WorkspaceState } from "../lib/real/useRealWorkspaces";
 
@@ -34,6 +35,14 @@ function shortDate(value: string | null): string {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString("en", { month: "short", day: "numeric" });
 }
+
+function shortDateTime(value: string): string {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString("en", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** Feed page size: one screen of events plus explicit "Load more" paging. */
+const ACTIVITY_PAGE_SIZE = 8;
 
 export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUserId }: {
   workspaceState: WorkspaceState;
@@ -62,6 +71,12 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
   const [archiving, setArchiving] = useState(false);
   const [busyMemberId, setBusyMemberId] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  // Activity feed doubles as the notification surface: the backend has no
+  // notifications table, so everyone reads the workspace activity log.
+  const [activities, setActivities] = useState<ApiActivity[] | null>(null);
+  const [activityTotal, setActivityTotal] = useState(0);
+  const [activityState, setActivityState] = useState<"loading" | "ready" | "error">("loading");
+  const [activityLoadingMore, setActivityLoadingMore] = useState(false);
 
   useEffect(() => {
     if (!workspaceState.selected) return;
@@ -70,6 +85,8 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
     setMembersState("loading");
     setMembers(null);
     setInvitationsState("loading");
+    setActivityState("loading");
+    setActivities(null);
 
     void (async () => {
       const token = await getAccessToken();
@@ -92,6 +109,18 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
         const friendly = friendlyError(error, "Could not load invitations");
         setInvitationsState("error");
         setNotice({ tone: "error", text: `Invitations unavailable: ${friendly.message}` });
+      }
+      try {
+        const page = await activitiesApi.listWorkspaceActivities(token, workspaceId, { limit: ACTIVITY_PAGE_SIZE });
+        if (disposed) return;
+        setActivities(page.items);
+        setActivityTotal(page.total);
+        setActivityState("ready");
+      } catch (error) {
+        if (disposed) return;
+        const friendly = friendlyError(error, "Could not load activity");
+        setActivityState("error");
+        setNotice({ tone: "error", text: `Recent activity unavailable: ${friendly.message}` });
       }
     })();
 
@@ -140,6 +169,7 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
       setInviteEmail("");
       setInviteFormOpen(false);
       setNotice({ tone: "success", text: `Invitation for ${created.email} created.` });
+      setReloadToken(value => value + 1); // refresh the activity feed too
     } catch (error) {
       const friendly = friendlyError(error, "Could not create invitation");
       setInviteFormError(`${friendly.title}: ${friendly.message}`);
@@ -157,6 +187,7 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
       if (!token) return;
       await workspaceApi.revokeInvitation(token, workspace.id, invitation.id);
       setNotice({ tone: "success", text: `Invitation for ${invitation.email} revoked.` });
+      setReloadToken(value => value + 1); // refresh the activity feed too
     } catch (error) {
       const friendly = friendlyError(error, "Could not revoke invitation");
       setNotice({ tone: "error", text: `${friendly.title}: ${friendly.message}` });
@@ -203,6 +234,7 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
       if (!token) throw new Error("Sign-in session ended. Please sign in again.");
       await workspaceApi.updateMemberRole(token, workspace.id, member.user_id, role);
       setNotice({ tone: "success", text: `${member.display_name} is now ${role === "Admin" ? "an Admin" : "a Member"}.` });
+      setReloadToken(value => value + 1); // refresh the activity feed too
     } catch (error) {
       const friendly = friendlyError(error, "Could not change the role");
       setNotice({ tone: "error", text: `${friendly.title}: ${friendly.message}` });
@@ -259,6 +291,7 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
       workspaceState.applyWorkspace(updated);
       setRenameName(updated.name);
       setNotice({ tone: "success", text: `Workspace renamed to ${updated.name}.` });
+      setReloadToken(value => value + 1); // refresh the activity feed too
     } catch (error) {
       const friendly = friendlyError(error, "Could not rename the workspace");
       setRenameError(`${friendly.title}: ${friendly.message}`);
@@ -291,6 +324,27 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
     setRenameName(workspaceState.selected?.name ?? "");
     setRenameError(null);
   }, [workspaceState.selected?.id, workspaceState.selected?.name]);
+
+  async function loadMoreActivity() {
+    const workspace = workspaceState.selected;
+    if (!workspace || activities === null) return;
+    setActivityLoadingMore(true);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Sign-in session ended. Please sign in again.");
+      const page = await activitiesApi.listWorkspaceActivities(token, workspace.id, {
+        limit: ACTIVITY_PAGE_SIZE,
+        offset: activities.length,
+      });
+      setActivities(previous => [...(previous ?? []), ...page.items]);
+      setActivityTotal(page.total);
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not load activity");
+      setNotice({ tone: "error", text: `Could not load more activity: ${friendly.message}` });
+    } finally {
+      setActivityLoadingMore(false);
+    }
+  }
 
   // The notice must survive paths that unmount the workspace body (e.g. the
   // first-run create form shown right after archiving the only workspace).
@@ -579,6 +633,55 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
           title="No projects yet"
           description={isAdmin ? "Create the first project from the Projects page in the sidebar." : "A workspace Owner or Admin sets up projects."}
         />
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-heading"><ActivityIcon size={15} className="text-muted" />Recent activity</h2>
+          {activityState === "ready" && activities && activities.length > 0 && <Badge tone="neutral">Newest {activities.length} of {activityTotal}</Badge>}
+        </div>
+        {activityState !== "ready" && (activityState === "loading" ? <LoadingState label="Loading activity" /> : (
+          <ErrorState
+            title="Recent activity could not be loaded"
+            description="The activity feed is temporarily unavailable."
+            action={<Button onClick={() => setReloadToken(token => token + 1)}>Retry</Button>}
+          />
+        ))}
+        {activityState === "ready" && activities?.length === 0 && (
+          <EmptyState title="No activity yet" description="Actions taken in this workspace appear here — projects, tasks, meetings, and memberships." />
+        )}
+        {activityState === "ready" && activities && activities.length > 0 && (
+          <ul className="divide-y divide-line rounded-xl border border-line bg-surface">
+            {activities.map(activity => (
+              <li key={activity.id} className="flex flex-wrap items-start gap-3 p-3">
+                <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-hover">
+                  <ActivityIcon size={13} className="text-muted" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-secondary">
+                    <span className="font-semibold text-heading">{activity.actor_display_name?.trim() || "Someone"}</span>{" "}
+                    {activityText(activity)}
+                  </p>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-muted">
+                    <span>{shortDateTime(activity.created_at)}</span>
+                    <Badge tone="neutral">{activity.resource_type}</Badge>
+                    {!activity.actor_user_id && <span>System</span>}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {activityState === "ready" && activities !== null && activities.length < activityTotal && (
+          <div className="flex justify-center">
+            <Button size="sm" disabled={activityLoadingMore} icon={activityLoadingMore ? <Loader2 size={13} className="animate-spin" /> : undefined} onClick={() => void loadMoreActivity()}>
+              {activityLoadingMore ? "Loading…" : `Load more (${activityTotal - activities.length} older)`}
+            </Button>
+          </div>
+        )}
+        <p className="text-[10px] text-muted">
+          This feed is the workspace's notification surface — every action is recorded here; there is no separate per-person inbox yet.
+        </p>
       </section>
     </div>
   );

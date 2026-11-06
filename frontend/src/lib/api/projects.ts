@@ -138,6 +138,11 @@ export interface ProjectsApi {
     attendee_user_ids?: string[];
   }): Promise<ApiMeeting>;
   deleteMeeting(accessToken: string, workspaceId: string, projectId: string, meetingId: string): Promise<void>;
+  listAttendees(accessToken: string, workspaceId: string, projectId: string, meetingId: string): Promise<ApiMeetingAttendee[]>;
+  /** 201 with the attendee row; the backend rejects duplicates (409) and non-members (422). */
+  addAttendee(accessToken: string, workspaceId: string, projectId: string, meetingId: string, userId: string): Promise<ApiMeetingAttendee>;
+  /** 204; allowed for managers and for the attendee removing themselves. */
+  removeAttendee(accessToken: string, workspaceId: string, projectId: string, meetingId: string, userId: string): Promise<void>;
   listResources(accessToken: string, workspaceId: string, projectId: string, filters?: { type?: ApiResourceType | ""; limit?: number }): Promise<ApiResource[]>;
   createResource(accessToken: string, workspaceId: string, projectId: string, input: {
     name: string;
@@ -205,6 +210,18 @@ export type ApiMeeting = {
   organizer_user_id: string | null;
   organizer_display_name: string | null;
   attendee_count: number;
+};
+
+/**
+ * Meeting attendees under
+ * GET/POST/DELETE /workspaces/{wid}/projects/{pid}/meetings/{mid}/attendees.
+ * Adding is meeting-manager-only; removal is manager-or-self; listing is open
+ * to any workspace member.
+ */
+export type ApiMeetingAttendee = {
+  user_id: string;
+  display_name: string;
+  created_at: string;
 };
 
 /** Resources under GET/POST /workspaces/{wid}/projects/{pid}/resources. */
@@ -330,6 +347,19 @@ export const projectsApi: ProjectsApi = {
   },
   async deleteMeeting(accessToken: string, workspaceId: string, projectId: string, meetingId: string) {
     return apiDelete(`/workspaces/${workspaceId}/projects/${projectId}/meetings/${meetingId}`, accessToken);
+  },
+  async listAttendees(accessToken: string, workspaceId: string, projectId: string, meetingId: string) {
+    return apiGet<ApiMeetingAttendee[]>(`/workspaces/${workspaceId}/projects/${projectId}/meetings/${meetingId}/attendees`, accessToken);
+  },
+  async addAttendee(accessToken: string, workspaceId: string, projectId: string, meetingId: string, userId: string) {
+    return apiPost<ApiMeetingAttendee>(
+      `/workspaces/${workspaceId}/projects/${projectId}/meetings/${meetingId}/attendees`,
+      { user_id: userId },
+      accessToken,
+    );
+  },
+  async removeAttendee(accessToken: string, workspaceId: string, projectId: string, meetingId: string, userId: string) {
+    return apiDelete(`/workspaces/${workspaceId}/projects/${projectId}/meetings/${meetingId}/attendees/${userId}`, accessToken);
   },
   async listResources(accessToken: string, workspaceId: string, projectId: string, filters?: { type?: ApiResourceType | ""; limit?: number }) {
     const params: string[] = [];

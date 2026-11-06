@@ -1,14 +1,14 @@
 /**
  * Real-data project detail page for signed-in users.
  *
- * Reads the project-scoped backend routers (tasks, members, milestones) and
- * keeps the same loading/error/empty discipline as the other real views.
- * Prototype project data is never mixed in. Meetings/resources remain
- * prototype-only until a later slice.
+ * Reads the project-scoped backend routers (tasks, members, milestones,
+ * meetings with attendee management) and keeps the same loading/error/empty
+ * discipline as the other real views. Prototype project data is never mixed
+ * in. Resources remain the last prototype-only slice.
  */
 
 import { useEffect, useState, type FormEvent } from "react";
-import { ArrowLeft, Loader2, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, Trash2, UserPlus, UserMinus, Users } from "lucide-react";
 import {
   Badge,
   Button,
@@ -25,6 +25,7 @@ import {
   projectsApi,
   type ApiMilestone,
   type ApiMeeting,
+  type ApiMeetingAttendee,
   type ApiMeetingType,
   type ApiProject,
   type ApiProjectMember,
@@ -66,10 +67,12 @@ function shortDate(value: string | null): string {
 type TabName = "Tasks" | "Meetings" | "Resources" | "Members" | "Milestones";
 const TABS: TabName[] = ["Tasks", "Meetings", "Resources", "Members", "Milestones"];
 
-export function RealProjectDetailPage({ workspaceState, projectId, getAccessToken, onBack }: {
+export function RealProjectDetailPage({ workspaceState, projectId, getAccessToken, identityUserId, onBack }: {
   workspaceState: WorkspaceState;
   projectId: string;
   getAccessToken: () => Promise<string | null>;
+  /** Signed-in user's id; attendees may always remove themselves from meetings. */
+  identityUserId: string;
   onBack: () => void;
 }) {
   const workspace = workspaceState.selected;
@@ -87,6 +90,8 @@ export function RealProjectDetailPage({ workspaceState, projectId, getAccessToke
 
   const isCollaborator = (project?.current_user_role ?? null) !== null;
   const isManager = project?.current_user_role === "Project Manager";
+  // Backend meeting management = Project Manager OR workspace Owner/Admin.
+  const canManageMeetings = isManager || workspace?.role === "Owner" || workspace?.role === "Admin";
 
   useEffect(() => {
     if (!workspace) return;
@@ -188,7 +193,9 @@ export function RealProjectDetailPage({ workspaceState, projectId, getAccessToke
               projectId={projectId}
               members={members}
               isCollaborator={isCollaborator}
+              canManageMeetings={canManageMeetings}
               archived={archived}
+              identityUserId={identityUserId}
               getAccessToken={getAccessToken}
               onNotice={text => { setStatusNotice(text); setActionError(null); }}
               onError={text => { setActionError(text); setStatusNotice(null); }}
@@ -658,12 +665,14 @@ function formatDateTime(value: string): string {
     : parsed.toLocaleString("en", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, archived, getAccessToken, onNotice, onError }: {
+function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, canManageMeetings, archived, identityUserId, getAccessToken, onNotice, onError }: {
   workspaceId: string;
   projectId: string;
   members: ApiProjectMember[];
   isCollaborator: boolean;
+  canManageMeetings: boolean;
   archived: boolean;
+  identityUserId: string;
   getAccessToken: () => Promise<string | null>;
   onNotice: (text: string) => void;
   onError: (text: string) => void;
@@ -680,6 +689,12 @@ function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, archiv
   const [meetingType, setMeetingType] = useState<ApiMeetingType>("Team sync");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  // Attendee management: loaded lazily per meeting on first expand.
+  const [expandedMeetingId, setExpandedMeetingId] = useState<string | null>(null);
+  const [attendeesByMeeting, setAttendeesByMeeting] = useState<Record<string, ApiMeetingAttendee[]>>({});
+  const [attendeeLoadState, setAttendeeLoadState] = useState<Record<string, "loading" | "ready" | "error">>({});
+  const [addSelection, setAddSelection] = useState("");
+  const [busyAttendeeKey, setBusyAttendeeKey] = useState<string | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -701,6 +716,100 @@ function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, archiv
     })();
     return () => { disposed = true; };
   }, [workspaceId, projectId, getAccessToken, reloadToken]);
+
+  // Attendee caches belong to one project scope; clear them when it changes.
+  useEffect(() => {
+    setAttendeesByMeeting({});
+    setAttendeeLoadState({});
+    setExpandedMeetingId(null);
+    setAddSelection("");
+  }, [workspaceId, projectId]);
+
+  async function loadAttendees(meetingId: string) {
+    const token = await getAccessToken();
+    if (!token) {
+      setAttendeeLoadState(state => ({ ...state, [meetingId]: "error" }));
+      return;
+    }
+    try {
+      const rows = await projectsApi.listAttendees(token, workspaceId, projectId, meetingId);
+      setAttendeesByMeeting(state => ({ ...state, [meetingId]: rows }));
+      setAttendeeLoadState(state => ({ ...state, [meetingId]: "ready" }));
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not load attendees");
+      onError(`${friendly.title}: ${friendly.message}`);
+      setAttendeeLoadState(state => ({ ...state, [meetingId]: "error" }));
+    }
+  }
+
+  async function toggleAttendees(meeting: ApiMeeting) {
+    const next = expandedMeetingId === meeting.id ? null : meeting.id;
+    setExpandedMeetingId(next);
+    if (next && attendeesByMeeting[next] === undefined) {
+      setAttendeeLoadState(state => ({ ...state, [next]: "loading" }));
+      void loadAttendees(next);
+    }
+  }
+
+  async function removeAttendeeAction(meeting: ApiMeeting, attendee: ApiMeetingAttendee) {
+    const selfRemoval = attendee.user_id === identityUserId;
+    const confirmed = window.confirm(
+      selfRemoval
+        ? `Leave "${meeting.title}"? You can be re-added by a manager.`
+        : `Remove ${attendee.display_name} from "${meeting.title}"?`,
+    );
+    if (!confirmed) return;
+    const key = `${meeting.id}:${attendee.user_id}`;
+    const previous = attendeesByMeeting[meeting.id] ?? [];
+    setBusyAttendeeKey(key);
+    // Optimistic removal with rollback: the chip disappears immediately.
+    setAttendeesByMeeting(state => ({ ...state, [meeting.id]: previous.filter(item => item.user_id !== attendee.user_id) }));
+    setMeetings(list => list.map(item => (item.id === meeting.id ? { ...item, attendee_count: Math.max(0, item.attendee_count - 1) } : item)));
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Sign-in session ended. Please sign in again.");
+      await projectsApi.removeAttendee(token, workspaceId, projectId, meeting.id, attendee.user_id);
+      onNotice(selfRemoval ? `You left "${meeting.title}".` : `${attendee.display_name} removed from "${meeting.title}".`);
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not update attendees");
+      onError(`${friendly.title}: ${friendly.message}`);
+      void loadAttendees(meeting.id);
+    } finally {
+      setBusyAttendeeKey(null);
+    }
+  }
+
+  async function addAttendeeAction(meeting: ApiMeeting) {
+    if (!addSelection) return;
+    const member = members.find(item => item.user_id === addSelection);
+    if (!member) return;
+    const key = `${meeting.id}:add`;
+    setBusyAttendeeKey(key);
+    const optimistic: ApiMeetingAttendee = { user_id: member.user_id, display_name: member.display_name, created_at: new Date().toISOString() };
+    setAttendeesByMeeting(state => ({
+      ...state,
+      [meeting.id]: [...(state[meeting.id] ?? []), optimistic].sort((a, b) => a.display_name.localeCompare(b.display_name)),
+    }));
+    setMeetings(list => list.map(item => (item.id === meeting.id ? { ...item, attendee_count: item.attendee_count + 1 } : item)));
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Sign-in session ended. Please sign in again.");
+      const created = await projectsApi.addAttendee(token, workspaceId, projectId, meeting.id, member.user_id);
+      // Swap the optimistic row for the server's authoritative record.
+      setAttendeesByMeeting(state => ({
+        ...state,
+        [meeting.id]: (state[meeting.id] ?? []).map(item => (item.user_id === created.user_id ? created : item)).sort((a, b) => a.display_name.localeCompare(b.display_name)),
+      }));
+      onNotice(`${created.display_name} added to "${meeting.title}".`);
+      setAddSelection("");
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not add attendee");
+      onError(`${friendly.title}: ${friendly.message}`);
+      void loadAttendees(meeting.id);
+    } finally {
+      setBusyAttendeeKey(null);
+    }
+  }
 
   async function submitCreate(event: FormEvent) {
     event.preventDefault();
@@ -741,6 +850,11 @@ function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, archiv
   async function removeMeeting(meeting: ApiMeeting) {
     if (!window.confirm(`Delete meeting "${meeting.title}"?`)) return;
     setMeetings(previous => previous.filter(item => item.id !== meeting.id));
+    setAttendeesByMeeting(state => {
+      const next = { ...state };
+      delete next[meeting.id];
+      return next;
+    });
     try {
       const token = await getAccessToken();
       if (!token) return;
@@ -798,29 +912,131 @@ function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, archiv
       )}
       {phase === "ready" && sorted.length > 0 && (
         <ul className="divide-y divide-line rounded-xl border border-line bg-surface">
-          {sorted.map(meeting => (
-            <li key={meeting.id} className="flex flex-wrap items-start gap-3 p-4">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="truncate text-sm font-semibold text-heading">{meeting.title}</p>
-                  <Badge tone="brand">{meeting.meeting_type}</Badge>
+          {sorted.map(meeting => {
+            const expanded = expandedMeetingId === meeting.id;
+            const attendeeRows = attendeesByMeeting[meeting.id] ?? [];
+            const attendeeIds = new Set(attendeeRows.map(item => item.user_id));
+            const addable = members.filter(item => item.workspace_member_active && !attendeeIds.has(item.user_id));
+            const attendeeState = attendeeLoadState[meeting.id] ?? "loading";
+            return (
+              <li key={meeting.id} className="p-4">
+                <div className="flex flex-wrap items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate text-sm font-semibold text-heading">{meeting.title}</p>
+                      <Badge tone="brand">{meeting.meeting_type}</Badge>
+                    </div>
+                    {meeting.description && <p className="mt-1 line-clamp-2 text-xs text-muted">{meeting.description}</p>}
+                    <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted">
+                      <span>{formatDateTime(meeting.starts_at)}</span>
+                      <span>{meeting.duration_minutes} min</span>
+                      <span>{meeting.attendee_count} attendee{meeting.attendee_count === 1 ? "" : "s"}</span>
+                      {meeting.organizer_display_name && <span>Organizer: {meeting.organizer_display_name}</span>}
+                    </p>
+                  </div>
+                  <Button variant="ghost" size="sm" icon={<Trash2 size={14} />} aria-label={`Delete ${meeting.title}`} onClick={() => void removeMeeting(meeting)}>
+                    Delete
+                  </Button>
                 </div>
-                {meeting.description && <p className="mt-1 line-clamp-2 text-xs text-muted">{meeting.description}</p>}
-                <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted">
-                  <span>{formatDateTime(meeting.starts_at)}</span>
-                  <span>{meeting.duration_minutes} min</span>
-                  <span>{meeting.attendee_count} attendee{meeting.attendee_count === 1 ? "" : "s"}</span>
-                  {meeting.organizer_display_name && <span>Organizer: {meeting.organizer_display_name}</span>}
-                </p>
-              </div>
-              <Button variant="ghost" size="sm" icon={<Trash2 size={14} />} aria-label={`Delete ${meeting.title}`} onClick={() => void removeMeeting(meeting)}>
-                Delete
-              </Button>
-            </li>
-          ))}
+
+                <div className="mt-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<Users size={13} />}
+                    aria-expanded={expanded}
+                    aria-controls={`attendees-${meeting.id}`}
+                    onClick={() => void toggleAttendees(meeting)}
+                  >
+                    {expanded ? "Hide attendees" : "Attendees"}
+                  </Button>
+                </div>
+
+                {expanded && (
+                  <div id={`attendees-${meeting.id}`} className="mt-2 space-y-2 rounded-xl border border-line bg-hover/40 p-3">
+                    {attendeeState === "loading" && <LoadingState label="Loading attendees" />}
+                    {attendeeState === "error" && (
+                      <ErrorState
+                        title="Attendees could not be loaded"
+                        description="Retry in a moment."
+                        action={<Button size="sm" onClick={() => { setAttendeeLoadState(state => ({ ...state, [meeting.id]: "loading" })); void loadAttendees(meeting.id); }}>Retry</Button>}
+                      />
+                    )}
+                    {attendeeState === "ready" && (
+                      <>
+                        {attendeeRows.length === 0 && (
+                          <p className="text-xs text-muted">
+                            No attendees yet.{canManageMeetings && !archived && addable.length > 0 ? " Add a project member below." : canManageMeetings ? " All project members are already attendees, or none can be." : " A manager adds attendees."}
+                          </p>
+                        )}
+                        {attendeeRows.length > 0 && (
+                          <ul className="flex flex-wrap gap-2">
+                            {attendeeRows.map(attendee => {
+                              const self = attendee.user_id === identityUserId;
+                              const canRemove = canManageMeetings || self;
+                              const busy = busyAttendeeKey === `${meeting.id}:${attendee.user_id}`;
+                              return (
+                                <li key={attendee.user_id} className="flex items-center gap-2 rounded-full border border-line bg-surface py-1 pl-1 pr-2">
+                                  <span className="grid h-6 w-6 place-items-center rounded-full bg-hover text-[9px] font-semibold text-secondary">
+                                    {attendee.display_name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase()}
+                                  </span>
+                                  <span className="text-[11px] font-medium text-heading">
+                                    {attendee.display_name}
+                                    {self && <span className="ml-1 text-[10px] text-muted">(you)</span>}
+                                  </span>
+                                  {canRemove && !archived && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      aria-label={self ? `Leave ${meeting.title}` : `Remove ${attendee.display_name} from ${meeting.title}`}
+                                      disabled={busyAttendeeKey !== null}
+                                      className="!px-1.5 !py-0"
+                                      icon={busy ? <Loader2 size={12} className="animate-spin" /> : <UserMinus size={12} />}
+                                      onClick={() => void removeAttendeeAction(meeting, attendee)}
+                                    >
+                                      {self ? "Leave" : "Remove"}
+                                    </Button>
+                                  )}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
+                        {canManageMeetings && !archived && (
+                          <div className="flex flex-wrap items-end gap-2">
+                            <Select
+                              aria-label={`Add attendee to ${meeting.title}`}
+                              className="w-56"
+                              value={addSelection}
+                              disabled={busyAttendeeKey !== null || addable.length === 0}
+                              onChange={event => setAddSelection(event.target.value)}
+                            >
+                              <option value="">{addable.length === 0 ? "No members left to add" : "Select a project member…"}</option>
+                              {addable.map(item => <option key={item.user_id} value={item.user_id}>{item.display_name}</option>)}
+                            </Select>
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              icon={busyAttendeeKey === `${meeting.id}:add` ? <Loader2 size={13} className="animate-spin" /> : <UserPlus size={13} />}
+                              disabled={!addSelection || busyAttendeeKey !== null}
+                              onClick={() => void addAttendeeAction(meeting)}
+                            >
+                              Add attendee
+                            </Button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
-      <p className="text-[10px] text-muted">{members.length} collaborator{members.length === 1 ? "" : "s"} available. Attendee management comes in a later slice.</p>
+      <p className="text-[10px] text-muted">
+        {members.length} project member{members.length === 1 ? "" : "s"} — attendees must be project members. Managers add and remove attendees; everyone can leave a meeting themselves.
+      </p>
     </div>
   );
 }
