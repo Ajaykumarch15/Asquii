@@ -6,22 +6,30 @@
  * dialog is open.
  */
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { LogIn, UserRoundPlus, X } from "lucide-react";
 import { Button, StateMessage, TextInput } from "./ui";
 import { useAuthActions, useAuthState } from "../lib/auth/AuthContext";
 
 type Mode = "sign-in" | "sign-up";
 
-export function AuthPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function AuthPanel({ open, onClose, initialMode = "sign-in" }: { open: boolean; onClose: () => void; initialMode?: Mode }) {
   const actions = useAuthActions();
   const { status } = useAuthState();
-  const [mode, setMode] = useState<Mode>("sign-in");
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+
+  // Landing CTAs open the dialog in a specific mode; re-apply on each open.
+  useEffect(() => {
+    if (!open) return;
+    setMode(initialMode);
+    setError(null);
+    setInfo(null);
+  }, [open, initialMode]);
 
   if (!open) return null;
 

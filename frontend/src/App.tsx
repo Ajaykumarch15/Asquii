@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { AuthPanel } from "./components/AuthPanel";
+import { LandingPage } from "./components/LandingPage";
 import { KanbanPage } from "./modules/projects/pages/KanbanPage";
 import { MeetingsPage } from "./modules/projects/pages/MeetingsPage";
 import { ProjectOverviewPage } from "./modules/projects/pages/OverviewPage";
@@ -38,6 +39,9 @@ export default function App() {
   const auth = useAuthState();
   const authActions = useAuthActions();
   const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
+  /** Anonymous visitors see the landing first; the prototype demo is opt-in. */
+  const [demoMode, setDemoMode] = useState(false);
   const [workspaceNotice, setWorkspaceNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
 
   const signedIn = auth.status === "authed";
@@ -291,9 +295,36 @@ export default function App() {
   const handleSignOut = async () => {
     await authActions.signOut();
     setWorkspaceNotice(null);
+    // Anonymous home is the landing again; the demo stays opt-in per session.
+    setDemoMode(false);
+    setActive("Overview");
   };
+  const showLanding = !signedIn && !demoMode && active === "Overview";
+  const openSignIn = () => { setAuthMode("sign-in"); setAuthOpen(true); };
+  const openSignUp = () => { setAuthMode("sign-up"); setAuthOpen(true); };
+  const exploreDemo = () => { setDemoMode(true); setActive("Overview"); };
+  const invitePending = !signedIn && new URLSearchParams(window.location.search).has("invite");
+
   return <>
-    <AppShell scope={signedIn ? "workspace" : scope} active={signedIn && active !== "Projects" ? "Overview" : active} onNavigate={navigate} workspace={displayWorkspace} workspaces={displayWorkspaces} projects={displayProjects} project={displaySelectedProject} tasks={workspaceTasks} people={data.people} personaId={personaId} role={displayRole} canAdmin={displayCanAdmin} notifications={notifications} onSelectWorkspace={selectWorkspace} onSelectProject={selectProject} onSelectPersona={setPersonaId} onCreateWorkspace={() => setWorkspaceEditorOpen(true)} onOpenProjectPage={openProjectPage} onReadNotification={markNotificationRead} onMarkAllNotificationsRead={markAllNotificationsRead} recentProjectIds={recentIds} onCreateProject={!signedIn && displayCanAdmin ? openCreateProject : undefined} onCreateTask={!signedIn && selectedProject ? () => openCreateTask() : undefined} onCreateMeeting={!signedIn && selectedProject ? openCreateMeeting : undefined} onCreateResource={!signedIn && selectedProject ? openCreateResource : undefined} onQuickCreate={!signedIn ? openQuickCreate : undefined} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} account={account} onShowSignIn={() => setAuthOpen(true)} onSignOut={() => void handleSignOut()}>
+    {showLanding ? (
+      <div className="min-h-screen bg-page text-heading">
+        {auth.status === "error" && (
+          <div role="alert" className="ui-error-banner mx-auto mt-4 max-w-6xl !items-center">
+            <span className="flex-1">{auth.message}</span>
+            <button className="ui-button ui-button-secondary ui-button-sm shrink-0" onClick={authActions.retry}>Retry</button>
+          </div>
+        )}
+        <LandingPage
+          theme={theme}
+          onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")}
+          onSignIn={openSignIn}
+          onSignUp={openSignUp}
+          onExploreDemo={exploreDemo}
+          invitePending={invitePending}
+        />
+      </div>
+    ) : (
+    <AppShell scope={signedIn ? "workspace" : scope} active={signedIn && active !== "Projects" ? "Overview" : active} onNavigate={navigate} workspace={displayWorkspace} workspaces={displayWorkspaces} projects={displayProjects} project={displaySelectedProject} tasks={workspaceTasks} people={data.people} personaId={personaId} role={displayRole} canAdmin={displayCanAdmin} notifications={notifications} onSelectWorkspace={selectWorkspace} onSelectProject={selectProject} onSelectPersona={setPersonaId} onCreateWorkspace={() => setWorkspaceEditorOpen(true)} onOpenProjectPage={openProjectPage} onReadNotification={markNotificationRead} onMarkAllNotificationsRead={markAllNotificationsRead} recentProjectIds={recentIds} onCreateProject={!signedIn && displayCanAdmin ? openCreateProject : undefined} onCreateTask={!signedIn && selectedProject ? () => openCreateTask() : undefined} onCreateMeeting={!signedIn && selectedProject ? openCreateMeeting : undefined} onCreateResource={!signedIn && selectedProject ? openCreateResource : undefined} onQuickCreate={!signedIn ? openQuickCreate : undefined} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} account={account} onShowSignIn={openSignIn} onSignOut={() => void handleSignOut()}>
     {storageError && <div role="alert" className="ui-error-banner mb-5"><span className="flex-1">{storageError}</span><button className="icon-button -my-1 text-danger" aria-label="Dismiss message" onClick={clearStorageError}><X size={15} /></button></div>}
     {auth.status === "error" && (
       <div role="alert" className="ui-error-banner mb-5 !items-center">
@@ -321,7 +352,8 @@ export default function App() {
       </>}
     {workspaceEditorOpen && <WorkspaceEditor onClose={() => setWorkspaceEditorOpen(false)} onSave={createWorkspace} />}
     </AppShell>
-    <AuthPanel open={authOpen} onClose={() => setAuthOpen(false)} />
+    )}
+    <AuthPanel open={authOpen} initialMode={authMode} onClose={() => setAuthOpen(false)} />
   </>;
 }
 
