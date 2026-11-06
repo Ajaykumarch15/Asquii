@@ -97,8 +97,7 @@ export function LandingPage({ theme, onToggleTheme, onSignIn, onSignUp, onExplor
             <div className="absolute -right-24 top-1/3 h-80 w-80 rounded-full bg-brand opacity-5 blur-3xl" />
           </div>
           <div className="relative mx-auto max-w-6xl px-5 pb-12 pt-8 text-center sm:pb-16 sm:pt-10 lg:pt-12">
-            <Badge tone="success">Live backend · Supabase auth</Badge>
-            <h1 className="mx-auto mt-6 max-w-6xl text-balance text-4xl font-bold leading-[1.05] tracking-tight sm:text-6xl lg:text-7xl xl:text-8xl">
+            <h1 className="mx-auto max-w-6xl text-balance text-4xl font-bold leading-[1.05] tracking-tight sm:text-6xl lg:text-7xl xl:text-8xl">
               Plan the work. Meet the people. Ship the project.
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-sm leading-relaxed text-muted sm:text-lg">
