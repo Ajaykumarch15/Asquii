@@ -43,6 +43,7 @@ export default function App() {
   const signedIn = auth.status === "authed";
   const realWorkspaces = useRealWorkspaces(signedIn, authActions.getAccessToken);
   const account = signedIn ? { name: auth.identity.displayName, email: auth.identity.email } : null;
+  const identityUserId = signedIn ? auth.identity.userId : "";
   const [scope, setScope] = useState<Scope>("workspace");
   const [active, setActive] = useState("Overview");
   const [workspaceId, setWorkspaceId] = useState(() => readLocal("asquii.active-workspace", "workspace-product"));
@@ -306,7 +307,7 @@ export default function App() {
           ? (realProjectId
             ? <RealProjectDetailPage workspaceState={realWorkspaces} projectId={realProjectId} getAccessToken={authActions.getAccessToken} onBack={() => setRealProjectId(null)} />
             : <RealProjectsPage workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} onOpenProject={setRealProjectId} />)
-          : <RealWorkspaceHome workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} />}
+          : <RealWorkspaceHome workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} identityUserId={identityUserId} />}
       </>
       : <>
         {!isPeoplePage && active !== "Overview" && !(scope === "project" && active === "Settings") && !(scope === "workspace" && active === "Projects") && <div className="mb-5 flex flex-wrap items-end justify-between gap-3 sm:mb-6"><div><h1 className="mobile-page-title text-2xl font-semibold tracking-tight">{pageTitle}</h1><p className="mt-1.5 text-sm text-muted">{description(scope, active, role)}</p></div>{action && <Button variant="primary" icon={<Plus size={15} />} onClick={scope === "workspace" ? openCreateProject : () => openCreateTask()}>{action}</Button>}</div>}

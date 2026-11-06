@@ -2,15 +2,16 @@
  * Real-data workspace body for signed-in users.
  *
  * Replaces prototype screens while a session is active so sample records are
- * never mixed with account data. Slice scope: workspace identity, members,
- * invitations (create/list/revoke/accept), and project entry points.
+ * never mixed with account data. Slice scope: workspace identity, members
+ * (role change, removal, self-leave), invitations (create/list/revoke/accept),
+ * workspace settings (rename, archive), and project entry points.
  */
 
 import { useEffect, useState, type FormEvent } from "react";
-import { BriefcaseBusiness, Copy, Loader2, Plus, Trash2, Users } from "lucide-react";
+import { Archive, BriefcaseBusiness, Copy, Loader2, Pencil, Plus, Trash2, Users } from "lucide-react";
 import { Badge, Button, EmptyState, ErrorState, LoadingState, Select, TextInput } from "./ui";
 import { friendlyError } from "../lib/api/client";
-import { workspaceApi, type ApiInvitation, type ApiWorkspace, type ApiWorkspaceMember } from "../lib/api/workspace";
+import { workspaceApi, type ApiInvitation, type ApiWorkspace, type ApiWorkspaceMember, type EditableWorkspaceRole } from "../lib/api/workspace";
 import type { WorkspaceState } from "../lib/real/useRealWorkspaces";
 
 const roleBadgeTone = { Owner: "brand", Admin: "warning", Member: "neutral" } as const;
@@ -34,9 +35,11 @@ function shortDate(value: string | null): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString("en", { month: "short", day: "numeric" });
 }
 
-export function RealWorkspaceHome({ workspaceState, getAccessToken }: {
+export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUserId }: {
   workspaceState: WorkspaceState;
   getAccessToken: () => Promise<string | null>;
+  /** Signed-in user's id; used to distinguish "Leave" from "Remove" in the people list. */
+  identityUserId: string;
 }) {
   const [members, setMembers] = useState<ApiWorkspaceMember[] | null>(null);
   const [membersState, setMembersState] = useState<"loading" | "ready" | "error">("loading");
@@ -53,6 +56,11 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken }: {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState("");
+  const [renameSubmitting, setRenameSubmitting] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [archiving, setArchiving] = useState(false);
+  const [busyMemberId, setBusyMemberId] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
@@ -184,6 +192,114 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken }: {
     }
   }
 
+  async function changeRole(member: ApiWorkspaceMember, role: EditableWorkspaceRole) {
+    if (!workspace) return;
+    if (!window.confirm(`Change ${member.display_name}'s role from ${member.role} to ${role}?`)) return;
+    setBusyMemberId(member.user_id);
+    // Optimistically reflect the new role; roll back if the backend refuses.
+    setMembers(previous => (previous ?? []).map(row => (row.user_id === member.user_id ? { ...row, role } : row)));
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Sign-in session ended. Please sign in again.");
+      await workspaceApi.updateMemberRole(token, workspace.id, member.user_id, role);
+      setNotice({ tone: "success", text: `${member.display_name} is now ${role === "Admin" ? "an Admin" : "a Member"}.` });
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not change the role");
+      setNotice({ tone: "error", text: `${friendly.title}: ${friendly.message}` });
+      setMembers(previous => (previous ?? []).map(row => (row.user_id === member.user_id ? { ...row, role: member.role } : row)));
+      setReloadToken(value => value + 1);
+    } finally {
+      setBusyMemberId(null);
+    }
+  }
+
+  async function removeMemberAction(member: ApiWorkspaceMember) {
+    if (!workspace) return;
+    const selfRemoval = member.user_id === identityUserId;
+    const confirmed = selfRemoval
+      ? window.confirm(`Leave "${workspace.name}"? You lose access to its projects until an admin invites you again.`)
+      : window.confirm(`Remove ${member.display_name} from the workspace? They lose access until invited again.`);
+    if (!confirmed) return;
+    setBusyMemberId(member.user_id);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Sign-in session ended. Please sign in again.");
+      await workspaceApi.removeMember(token, workspace.id, member.user_id);
+      if (selfRemoval) {
+        // The workspace disappears from this account's list; the shell reselects.
+        setNotice({ tone: "success", text: `You left ${workspace.name}.` });
+        workspaceState.reload();
+      } else {
+        setNotice({ tone: "success", text: `${member.display_name} removed from the workspace.` });
+        setReloadToken(value => value + 1);
+      }
+    } catch (error) {
+      const friendly = friendlyError(error, selfRemoval ? "Could not leave the workspace" : "Could not remove the member");
+      setNotice({ tone: "error", text: `${friendly.title}: ${friendly.message}` });
+      setReloadToken(value => value + 1);
+    } finally {
+      setBusyMemberId(null);
+    }
+  }
+
+  async function submitRename(event: FormEvent) {
+    event.preventDefault();
+    if (!workspace) return;
+    const name = renameName.trim();
+    if (!name || name === workspace.name) return;
+    setRenameSubmitting(true);
+    setRenameError(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        setRenameError("Sign-in session ended. Please sign in again.");
+        return;
+      }
+      const updated = await workspaceApi.renameWorkspace(token, workspace.id, name);
+      workspaceState.applyWorkspace(updated);
+      setRenameName(updated.name);
+      setNotice({ tone: "success", text: `Workspace renamed — URL slug is now asquii.com/${updated.slug}.` });
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not rename the workspace");
+      setRenameError(`${friendly.title}: ${friendly.message}`);
+    } finally {
+      setRenameSubmitting(false);
+    }
+  }
+
+  async function archiveCurrent() {
+    if (!workspace) return;
+    if (!window.confirm(`Archive "${workspace.name}"? It is hidden from every member and cannot be reopened from the app.`)) return;
+    setArchiving(true);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Sign-in session ended. Please sign in again.");
+      await workspaceApi.archiveWorkspace(token, workspace.id);
+      // No resume endpoint: the workspace must drop out of the account's list.
+      setNotice({ tone: "success", text: `${workspace.name} archived. Pending invitations were revoked.` });
+      workspaceState.reload();
+    } catch (error) {
+      const friendly = friendlyError(error, "Could not archive the workspace");
+      setNotice({ tone: "error", text: `${friendly.title}: ${friendly.message}` });
+    } finally {
+      setArchiving(false);
+    }
+  }
+
+  // Keep the rename field aligned with the currently selected workspace.
+  useEffect(() => {
+    setRenameName(workspaceState.selected?.name ?? "");
+    setRenameError(null);
+  }, [workspaceState.selected?.id, workspaceState.selected?.name]);
+
+  // The notice must survive paths that unmount the workspace body (e.g. the
+  // first-run create form shown right after archiving the only workspace).
+  const noticeBlock = notice && (
+    <div role="status" className={`rounded-xl border border-line px-4 py-3 text-xs font-medium ${notice.tone === "success" ? "bg-brand-soft text-brand" : "bg-danger-soft text-danger"}`}>
+      {notice.text}
+    </div>
+  );
+
   if (workspaceState.phase === "loading") {
     return <LoadingState label="Loading your workspace" />;
   }
@@ -198,11 +314,24 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken }: {
   }
   if (workspaceState.phase === "idle") return null;
 
+  // Derived flags shared by the workspace and first-run paths; must be declared
+  // before the early returns that consume them.
+  const inviteToken = readInviteToken();
   const workspace = workspaceState.selected;
   if (!workspace) {
     // No real workspaces: first-run creation path.
     return (
       <div className="space-y-5">
+        {noticeBlock}
+        {inviteToken && (
+          <div className="rounded-xl border border-line bg-warning-soft px-4 py-3">
+            <p className="text-xs font-semibold text-heading">You have a workspace invitation</p>
+            <p className="mt-1 text-xs text-muted">Accepting joins you at the invited role — no workspace of your own needed.</p>
+            <Button variant="primary" size="sm" className="mt-2" icon={<Users size={14} />} onClick={() => void acceptInvite(inviteToken)}>
+              Accept invitation
+            </Button>
+          </div>
+        )}
         <div className="ui-state"><div className="ui-state-mark">✦</div>
           <h3>Create your first workspace</h3>
           <p>Workspaces group projects, people, and roles.</p>
@@ -226,16 +355,12 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken }: {
   }
 
   const isAdmin = workspace.role === "Owner" || workspace.role === "Admin";
+  const isOwner = workspace.role === "Owner";
   const pendingCount = invitations.filter(item => item.status === "pending").length;
-  const inviteToken = readInviteToken();
 
   return (
     <div className="space-y-6">
-      {notice && (
-        <div role="status" className={`rounded-xl border border-line px-4 py-3 text-xs font-medium ${notice.tone === "success" ? "bg-brand-soft text-brand" : "bg-danger-soft text-danger"}`}>
-          {notice.text}
-        </div>
-      )}
+      {noticeBlock}
       {inviteToken && (
         <div className="rounded-xl border border-line bg-warning-soft px-4 py-3">
           <p className="text-xs font-semibold text-heading">You have a workspace invitation</p>
@@ -258,6 +383,57 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken }: {
       </div>
 
       <section className="space-y-3">
+        <h2 className="text-sm font-semibold text-heading">Workspace settings</h2>
+        {(isAdmin || isOwner) && (
+          <div className="space-y-4 rounded-xl border border-line bg-surface p-4">
+            {isAdmin && (
+              <form onSubmit={submitRename} className="flex flex-wrap items-end gap-2">
+                <div className="min-w-0 flex-1">
+                  <TextInput
+                    label="Workspace name"
+                    required
+                    maxLength={120}
+                    className="w-full"
+                    value={renameName}
+                    onChange={event => setRenameName(event.target.value)}
+                    icon={<Pencil size={13} />}
+                  />
+                  <p className="mt-1 text-[10px] text-muted">Renaming regenerates the shared URL slug (asquii.com/{workspace.slug}).</p>
+                </div>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  disabled={renameSubmitting || !renameName.trim() || renameName.trim() === workspace.name}
+                  icon={renameSubmitting ? <Loader2 size={14} className="animate-spin" /> : undefined}
+                >
+                  {renameSubmitting ? "Saving…" : "Save name"}
+                </Button>
+                {renameError && <p className="w-full text-xs text-danger">{renameError}</p>}
+              </form>
+            )}
+            {isOwner && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line p-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold text-heading">Archive this workspace</p>
+                  <p className="mt-0.5 text-[10px] text-muted">Hides it from every member, revokes pending invitations, and cannot be undone from the app — there is no resume endpoint yet.</p>
+                </div>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={archiving}
+                  icon={archiving ? <Loader2 size={14} className="animate-spin" /> : <Archive size={13} />}
+                  onClick={() => void archiveCurrent()}
+                >
+                  {archiving ? "Archiving…" : "Archive workspace"}
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-heading"><Users size={15} className="text-muted" />People ({members?.length ?? 0})</h2>
         </div>
@@ -271,18 +447,55 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken }: {
         )}
         {membersState === "ready" && members && (
           <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {members.map(member => (
-              <li key={member.user_id} className="flex items-center gap-3 rounded-xl border border-line bg-surface p-3">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-hover text-[10px] font-semibold text-secondary">
-                  {member.display_name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase()}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-xs font-medium text-heading">{member.display_name}</span>
-                  <span className="block truncate text-[10px] text-muted">{member.job_title ?? "No title yet"}</span>
-                </span>
-                <Badge tone={roleBadgeTone[member.role as keyof typeof roleBadgeTone] ?? "neutral"}>{member.role}</Badge>
-              </li>
-            ))}
+            {members.map(member => {
+              const self = member.user_id === identityUserId;
+              const busy = busyMemberId === member.user_id;
+              // Role editing is Owner-only (the backend rejects it for everyone else);
+              // the Owner member itself is excluded — ownership moves via transfer.
+              const roleEditable = isOwner && !self && (member.role === "Admin" || member.role === "Member");
+              // Removal mirrors the service rules: self-leave for Admin/Member,
+              // the Owner removes Admins and Members, Admins remove Members only.
+              const canRemove = self
+                ? workspace.role !== "Owner"
+                : isOwner || (isAdmin && member.role === "Member");
+              return (
+                <li key={member.user_id} className="flex flex-wrap items-center gap-3 rounded-xl border border-line bg-surface p-3">
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-hover text-[10px] font-semibold text-secondary">
+                    {member.display_name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase()}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium text-heading">{member.display_name}{self && <span className="ml-1 text-[10px] text-muted">(you)</span>}</span>
+                    <span className="block truncate text-[10px] text-muted">{member.job_title ?? "No title yet"}</span>
+                  </span>
+                  {roleEditable ? (
+                    <Select
+                      aria-label={`Role for ${member.display_name}`}
+                      className="w-24"
+                      value={member.role}
+                      disabled={busy}
+                      onChange={event => void changeRole(member, event.target.value as EditableWorkspaceRole)}
+                    >
+                      <option value="Member">Member</option>
+                      <option value="Admin">Admin</option>
+                    </Select>
+                  ) : (
+                    <Badge tone={roleBadgeTone[member.role as keyof typeof roleBadgeTone] ?? "neutral"}>{member.role}</Badge>
+                  )}
+                  {canRemove && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={self ? `Leave ${workspace.name}` : `Remove ${member.display_name}`}
+                      disabled={busy}
+                      onClick={() => void removeMemberAction(member)}
+                    >
+                      {busy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                      {self ? "Leave" : "Remove"}
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

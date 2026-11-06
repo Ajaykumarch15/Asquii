@@ -7,6 +7,9 @@
 
 import { apiDelete, apiGet, apiPost, apiPatch } from "./client";
 
+/** Workspace roles the member-role endpoint accepts; Owner changes go through ownership transfer. */
+export type EditableWorkspaceRole = "Admin" | "Member";
+
 export type ApiWorkspace = {
   id: string;
   name: string;
@@ -48,6 +51,12 @@ export interface WorkspaceApi {
   createInvitation(accessToken: string, workspaceId: string, input: { email: string; role: "Admin" | "Member" }): Promise<ApiInvitation & { token: string }>;
   revokeInvitation(accessToken: string, workspaceId: string, invitationId: string): Promise<void>;
   acceptInvitation(accessToken: string, token: string): Promise<{ workspace_id: string; role: string }>;
+  /** Owner-only; the backend rejects role changes on the Owner member with 409. */
+  updateMemberRole(accessToken: string, workspaceId: string, userId: string, role: EditableWorkspaceRole): Promise<ApiWorkspaceMember>;
+  /** Soft remove: actor leaves when userId is their own; admins remove Members, the Owner removes Admins. */
+  removeMember(accessToken: string, workspaceId: string, userId: string): Promise<void>;
+  /** Owner-only, 204; there is no resume endpoint — archived workspaces leave the member's list. */
+  archiveWorkspace(accessToken: string, workspaceId: string): Promise<void>;
 }
 
 export const workspaceApi: WorkspaceApi = {
@@ -75,5 +84,15 @@ export const workspaceApi: WorkspaceApi = {
   },
   async acceptInvitation(accessToken: string, token: string) {
     return apiPost<{ workspace_id: string; role: string }>("/invitations/accept", { token }, accessToken);
+  },
+  async updateMemberRole(accessToken, workspaceId, userId, role) {
+    return apiPatch<ApiWorkspaceMember>(`/workspaces/${workspaceId}/members/${userId}/role`, { role }, accessToken);
+  },
+  async removeMember(accessToken, workspaceId, userId) {
+    return apiDelete(`/workspaces/${workspaceId}/members/${userId}`, accessToken);
+  },
+  async archiveWorkspace(accessToken, workspaceId) {
+    // Backend contract is POST (204, no body) — not DELETE.
+    await apiPost<void>(`/workspaces/${workspaceId}/archive`, {}, accessToken);
   },
 };
