@@ -14,14 +14,31 @@ def test_schema_revision_follows_preserved_empty_baseline():
     config.set_main_option("script_location", str(backend_root / "alembic"))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "0004_enable_rls_and_policies"
+    assert script.get_current_head() == "0005_rls_lock_read_relaxations"
     revision = script.get_revision("0002_mvp_schema")
     correction = script.get_revision("0003_lifecycle_hardening")
     hardening = script.get_revision("0004_enable_rls_and_policies")
+    relaxations = script.get_revision("0005_rls_lock_read_relaxations")
     assert revision.down_revision == "0001_empty_baseline"
     assert correction.down_revision == "0002_mvp_schema"
     assert hardening.down_revision == "0003_lifecycle_hardening"
+    assert relaxations.down_revision == "0004_enable_rls_and_policies"
     assert script.get_revision("0001_empty_baseline") is not None
+
+    relaxations_source = (
+        backend_root / "alembic" / "versions" / "0005_rls_lock_read_relaxations.py"
+    ).read_text(encoding="utf-8")
+    assert relaxations_source.count('"ALTER POLICY"') == 0
+    assert relaxations_source.count("ALTER POLICY") == 2
+    # Members/invitees may lock-read, but actual updates stay Owner/manager-only.
+    assert "OR private.is_workspace_member(id)" in relaxations_source
+    assert "OR private.can_read_project(workspace_id, id)" in relaxations_source
+    assert relaxations_source.count(
+        "private.has_workspace_role(id, ARRAY['Owner', 'Admin'])"
+    ) >= 2
+    assert relaxations_source.count(
+        "private.can_manage_project(workspace_id, id)\""
+    ) >= 1
 
 
 def test_alembic_pins_version_table_and_migration_search_path_to_public():
