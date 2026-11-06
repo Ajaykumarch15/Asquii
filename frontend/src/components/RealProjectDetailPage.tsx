@@ -996,6 +996,12 @@ function MeetingsPanel({ workspaceId, projectId, members, isCollaborator, canMan
                       <Badge tone="brand">{meeting.meeting_type}</Badge>
                     </div>
                     {meeting.description && <p className="mt-1 line-clamp-2 text-xs text-muted">{meeting.description}</p>}
+                    {meeting.agenda && (
+                      <div className="mt-2 rounded-lg border border-line bg-hover px-3 py-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Agenda</p>
+                        <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-secondary">{meeting.agenda}</p>
+                      </div>
+                    )}
                     <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted">
                       <span>{formatDateTime(meeting.starts_at)}</span>
                       <span>{meeting.duration_minutes} min</span>

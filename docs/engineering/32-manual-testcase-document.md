@@ -70,7 +70,7 @@ This document is a step-by-step regression script for the integrated frontend. I
 - **Invitation token shown once**: the token is returned only in the creation response. If it is lost, revoke the invitation and create another.
 - **No per-person notifications**: the workspace activity feed is the notification surface by design.
 - **Sidebar navigation is state-based**: only landing ↔ demo uses browser history entries. Browser Back from People/Settings/Overview is not expected to walk the sidebar history (see §10.4).
-- **Agenda is stored but not rendered** on the meeting card; verify it by reopening the edit form.
+- **Meeting agenda is plain text**: line breaks are preserved, but there is no rich-text formatting.
 
 ## 3. Conventions
 
@@ -1262,15 +1262,16 @@ Fill the counts at the end of the run.
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
 **Notes:**
 
-### TC-MEET-04 — Agenda persists
+### TC-MEET-04 — Agenda is displayed and persists
 
 **Priority:** High
 
 | # | Action | Expected result |
 |---|---|---|
-| 1 | Edit a meeting and change the Agenda. | — |
-| 2 | Save, then reopen **Edit**. | The new agenda is pre-filled (the card does not display it by design). |
-| 3 | Clear the agenda and save. | Reopening shows an empty agenda. |
+| 1 | Edit a meeting and enter a multi-line Agenda (include a line break). | — |
+| 2 | Save. | The meeting card shows an "Agenda" block under the description; the line break is preserved. |
+| 3 | Reopen **Edit**. | The same agenda is pre-filled. |
+| 4 | Clear the agenda and save. | The Agenda block disappears from the card and the edit form is empty. |
 
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
 **Notes:**
@@ -1631,7 +1632,7 @@ Notes:
 3. No per-person notification inbox — the workspace activity feed is the notification surface.
 4. Sidebar navigation is state-based; only landing ↔ demo participates in browser history.
 5. Invitation email delivery is not wired — the token must be copied and shared manually.
-6. Meeting agenda is stored and editable but not displayed on the meeting card.
+6. Meeting agenda is plain text (line breaks preserved, no rich formatting).
 7. Workspace archive has no restore endpoint in the app.
 8. Project membership add/remove is not implemented in the UI yet (Members tab is read-only).
 9. Resource binary upload is not supported; links and metadata only.
