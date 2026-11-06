@@ -155,6 +155,29 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem("asquii.notifications-read", JSON.stringify(readIds)); } catch { /* Read state still applies for this session. */ } }, [readIds]);
   useEffect(() => { try { localStorage.setItem("asquii.recent-projects", JSON.stringify(recentIds)); } catch { /* Recent projects still apply for this session. */ } }, [recentIds]);
 
+  // Landing <-> demo history: entering the demo pushes an entry, so both the
+  // in-app "Back to landing" control and the browser Back/Forward buttons stay
+  // in sync. Anonymous only — signed-in app state is untouched.
+  useEffect(() => {
+    if (signedIn) {
+      if (window.location.hash === "#demo") {
+        window.history.replaceState({ asquiiView: "app" }, "", window.location.pathname + window.location.search);
+      }
+      return;
+    }
+    // Direct loads with a stale #demo hash land on the landing page.
+    if (window.location.hash === "#demo" || window.history.state?.asquiiView !== "landing") {
+      window.history.replaceState({ asquiiView: "landing" }, "", window.location.pathname + window.location.search);
+    }
+    const onPopState = (event: PopStateEvent) => {
+      const view = (event.state as { asquiiView?: string } | null)?.asquiiView;
+      setDemoMode(view === "demo");
+      if (view !== "demo") setActive("Overview");
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [signedIn]);
+
   const navigate = (item: string) => {
     if (item === "Workspace overview") { setScope("workspace"); setActive("Overview"); return; }
     if (item === "Projects") { setScope("workspace"); setActive("Projects"); return; }
@@ -302,8 +325,20 @@ export default function App() {
   const showLanding = !signedIn && !demoMode && active === "Overview";
   const openSignIn = () => { setAuthMode("sign-in"); setAuthOpen(true); };
   const openSignUp = () => { setAuthMode("sign-up"); setAuthOpen(true); };
-  const exploreDemo = () => { setDemoMode(true); setActive("Overview"); };
-  const exitDemo = () => { setDemoMode(false); setActive("Overview"); };
+  const exploreDemo = () => {
+    window.history.pushState({ asquiiView: "demo" }, "", "#demo");
+    setDemoMode(true);
+    setActive("Overview");
+  };
+  const exitDemo = () => {
+    // Prefer the real history stack so browser Back/Forward stays coherent.
+    if (window.history.state?.asquiiView === "demo") {
+      window.history.back();
+    } else {
+      setDemoMode(false);
+      setActive("Overview");
+    }
+  };
   const invitePending = !signedIn && new URLSearchParams(window.location.search).has("invite");
 
   return <>
