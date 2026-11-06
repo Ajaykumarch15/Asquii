@@ -87,40 +87,50 @@ export function LandingPage({ theme, onToggleTheme, onSignIn, onSignUp, onExplor
       </header>
 
       <main>
-        <section className="mx-auto max-w-4xl px-5 pb-14 pt-16 text-center sm:pt-20">
-          <Badge tone="success">Live backend · Supabase auth</Badge>
-          <h1 className="mx-auto mt-4 max-w-2xl text-3xl font-bold tracking-tight sm:text-5xl">
-            Plan the work. Meet the people. Ship the project.
-          </h1>
-          <p className="mx-auto mt-4 max-w-xl text-sm text-muted sm:text-base">
-            Asquii keeps workspaces, projects, tasks, meetings and resources in one place — with
-            roles that match how your team actually works. Sign in to use your real workspace, or
-            look around the sample demo first.
-          </p>
-          <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
-            <Button variant="primary" onClick={onSignUp} icon={<ArrowRight size={15} />}>
-              Get started
-            </Button>
-            <Button onClick={onExploreDemo} icon={<FolderKanban size={15} />}>
-              Explore the demo mock
-            </Button>
+        <section className="relative overflow-hidden">
+          {/* Ambient fill for the hero's top/side space — purely decorative. */}
+          <div aria-hidden className="pointer-events-none absolute inset-0">
+            {/* bg-brand holds a var(--brand-primary) hex, so alpha modifiers do not
+                compile in Tailwind 3; opacity-* keeps the tint theme-aware. */}
+            <div className="absolute left-1/2 top-[-14rem] h-[38rem] w-[38rem] -translate-x-1/2 rounded-full bg-brand opacity-10 blur-3xl" />
+            <div className="absolute -left-24 top-1/4 h-72 w-72 rounded-full bg-brand opacity-5 blur-3xl" />
+            <div className="absolute -right-24 top-1/3 h-80 w-80 rounded-full bg-brand opacity-5 blur-3xl" />
           </div>
-          <p className="mt-3 text-[11px] text-muted">
-            The demo runs on sample data stored in this browser only — nothing you type there reaches the server.
-          </p>
-          {invitePending && (
-            <div className="mx-auto mt-6 max-w-xl rounded-xl border border-line bg-warning-soft px-4 py-3 text-left">
-              <p className="text-xs font-semibold text-heading">You have a workspace invitation</p>
-              <p className="mt-1 text-[11px] text-muted">
-                Sign in or create an account with the email address that received the invitation —
-                acceptance is validated against that address.
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <Button size="sm" variant="primary" icon={<LogIn size={13} />} onClick={onSignIn}>Sign in to accept</Button>
-                <Button size="sm" onClick={onSignUp}>Create account</Button>
-              </div>
+          <div className="relative mx-auto max-w-6xl px-5 pb-16 pt-20 text-center sm:pb-20 sm:pt-28 lg:pt-36">
+            <Badge tone="success">Live backend · Supabase auth</Badge>
+            <h1 className="mx-auto mt-6 max-w-6xl text-balance text-4xl font-bold leading-[1.05] tracking-tight sm:text-6xl lg:text-7xl xl:text-8xl">
+              Plan the work. Meet the people. Ship the project.
+            </h1>
+            <p className="mx-auto mt-6 max-w-2xl text-sm leading-relaxed text-muted sm:text-lg">
+              Asquii keeps workspaces, projects, tasks, meetings and resources in one place — with
+              roles that match how your team actually works. Sign in to use your real workspace, or
+              look around the sample demo first.
+            </p>
+            <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+              <Button variant="primary" onClick={onSignUp} icon={<ArrowRight size={15} />}>
+                Get started
+              </Button>
+              <Button onClick={onExploreDemo} icon={<FolderKanban size={15} />}>
+                Explore the demo mock
+              </Button>
             </div>
-          )}
+            <p className="mt-3 text-[11px] text-muted">
+              The demo runs on sample data stored in this browser only — nothing you type there reaches the server.
+            </p>
+            {invitePending && (
+              <div className="mx-auto mt-6 max-w-xl rounded-xl border border-line bg-warning-soft px-4 py-3 text-left">
+                <p className="text-xs font-semibold text-heading">You have a workspace invitation</p>
+                <p className="mt-1 text-[11px] text-muted">
+                  Sign in or create an account with the email address that received the invitation —
+                  acceptance is validated against that address.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button size="sm" variant="primary" icon={<LogIn size={13} />} onClick={onSignIn}>Sign in to accept</Button>
+                  <Button size="sm" onClick={onSignUp}>Create account</Button>
+                </div>
+              </div>
+            )}
+          </div>
         </section>
 
         <section className="mx-auto max-w-6xl px-5 pb-14">
