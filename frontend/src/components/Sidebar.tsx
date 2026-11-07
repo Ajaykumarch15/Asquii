@@ -1,11 +1,16 @@
-import { Activity, BriefcaseBusiness, ChevronsLeft, ChevronsRight, FolderKanban, LayoutDashboard, ListTodo, Plus, Settings2, Users, Video, FolderOpen, X } from "lucide-react";
+import { Activity, BriefcaseBusiness, ChevronsLeft, ChevronsRight, FolderKanban, LayoutDashboard, ListTodo, Milestone, Plus, Settings2, Users, Video, FolderOpen, X } from "lucide-react";
 import type { Project, Workspace } from "../model";
 import type { Scope } from "./AppShell";
 
-type SidebarProps = { scope: Scope; active: string; workspace: Workspace; workspaces: Workspace[]; projects: Project[]; project?: Project; mobileOpen: boolean; setMobileOpen: (open: boolean) => void; collapsed: boolean; setCollapsed: (update: (value: boolean) => boolean) => void; canAdmin: boolean; onNavigate: (item: string) => void; onSelectWorkspace: (id: string) => void; onSelectProject: (id: string) => void; onCreateWorkspace: () => void };
+type SidebarProps = { scope: Scope; active: string; workspace: Workspace; workspaces: Workspace[]; projects: Project[]; project?: Project; mobileOpen: boolean; setMobileOpen: (open: boolean) => void; collapsed: boolean; setCollapsed: (update: (value: boolean) => boolean) => void; canAdmin: boolean; /** Real (signed-in) project scope: backend project tabs. */ projectNav?: boolean; onNavigate: (item: string) => void; onSelectWorkspace: (id: string) => void; onSelectProject: (id: string) => void; onCreateWorkspace: () => void };
 
-export function Sidebar({ scope, active, workspace, workspaces, projects, project, mobileOpen, setMobileOpen, collapsed, setCollapsed, canAdmin, onNavigate, onSelectWorkspace, onSelectProject, onCreateWorkspace }: SidebarProps) {
-  const navItems = scope === "workspace" ? [{ label: "Overview", icon: LayoutDashboard }, { label: "Projects", icon: FolderKanban }, { label: "People", icon: Users }] : [{ label: "Overview", icon: LayoutDashboard }, { label: "People", icon: Users }, { label: "Kanban", icon: Activity }, { label: "Tasks", icon: ListTodo }, { label: "Meetings", icon: Video }, { label: "Resources", icon: FolderOpen }];
+const workspaceNav = [{ label: "Overview", icon: LayoutDashboard }, { label: "Projects", icon: FolderKanban }, { label: "People", icon: Users }];
+const prototypeProjectNav = [{ label: "Overview", icon: LayoutDashboard }, { label: "People", icon: Users }, { label: "Kanban", icon: Activity }, { label: "Tasks", icon: ListTodo }, { label: "Meetings", icon: Video }, { label: "Resources", icon: FolderOpen }];
+/** Mirrors the backend's project tabs for the signed-in shell. */
+const realProjectNav = [{ label: "Overview", icon: LayoutDashboard }, { label: "Kanban", icon: Activity }, { label: "Tasks", icon: ListTodo }, { label: "Meetings", icon: Video }, { label: "Resources", icon: FolderOpen }, { label: "Members", icon: Users }, { label: "Milestones", icon: Milestone }];
+
+export function Sidebar({ scope, active, workspace, workspaces, projects, project, mobileOpen, setMobileOpen, collapsed, setCollapsed, canAdmin, projectNav, onNavigate, onSelectWorkspace, onSelectProject, onCreateWorkspace }: SidebarProps) {
+  const navItems = scope === "workspace" ? workspaceNav : projectNav ? realProjectNav : prototypeProjectNav;
   const sidebarWidth = collapsed ? "md:w-[56px]" : "md:w-[220px]";
   const navigate = (label: string) => { onNavigate(label); setMobileOpen(false); };
   const chooseWorkspace = (id: string) => { onSelectWorkspace(id); setMobileOpen(false); };

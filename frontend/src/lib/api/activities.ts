@@ -89,18 +89,27 @@ export function activityText(activity: ApiActivity): string {
 
 export interface ActivitiesApi {
   listWorkspaceActivities(accessToken: string, workspaceId: string, filters?: ActivityFilters): Promise<ApiActivityPage>;
+  /** GET /workspaces/{wid}/projects/{pid}/activities — the project-scoped feed. */
+  listProjectActivities(accessToken: string, workspaceId: string, projectId: string, filters?: Omit<ActivityFilters, "project_id">): Promise<ApiActivityPage>;
+}
+
+/** Values accepted by both feeds; `project_id` exists only on the workspace feed. */
+function buildQuery(filters?: ActivityFilters): string {
+  const params: string[] = [];
+  if (filters?.project_id) params.push(`project_id=${encodeURIComponent(filters.project_id)}`);
+  if (filters?.actor_user_id) params.push(`actor_user_id=${encodeURIComponent(filters.actor_user_id)}`);
+  if (filters?.action) params.push(`action=${encodeURIComponent(filters.action)}`);
+  if (filters?.resource_type) params.push(`resource_type=${encodeURIComponent(filters.resource_type)}`);
+  if (filters?.limit) params.push(`limit=${filters.limit}`);
+  if (filters?.offset) params.push(`offset=${filters.offset}`);
+  return params.length > 0 ? `?${params.join("&")}` : "";
 }
 
 export const activitiesApi: ActivitiesApi = {
   async listWorkspaceActivities(accessToken: string, workspaceId: string, filters?: ActivityFilters) {
-    const params: string[] = [];
-    if (filters?.project_id) params.push(`project_id=${encodeURIComponent(filters.project_id)}`);
-    if (filters?.actor_user_id) params.push(`actor_user_id=${encodeURIComponent(filters.actor_user_id)}`);
-    if (filters?.action) params.push(`action=${encodeURIComponent(filters.action)}`);
-    if (filters?.resource_type) params.push(`resource_type=${encodeURIComponent(filters.resource_type)}`);
-    if (filters?.limit) params.push(`limit=${filters.limit}`);
-    if (filters?.offset) params.push(`offset=${filters.offset}`);
-    const query = params.length > 0 ? `?${params.join("&")}` : "";
-    return apiGet<ApiActivityPage>(`/workspaces/${workspaceId}/activities${query}`, accessToken);
+    return apiGet<ApiActivityPage>(`/workspaces/${workspaceId}/activities${buildQuery(filters)}`, accessToken);
+  },
+  async listProjectActivities(accessToken: string, workspaceId: string, projectId: string, filters?: Omit<ActivityFilters, "project_id">) {
+    return apiGet<ApiActivityPage>(`/workspaces/${workspaceId}/projects/${projectId}/activities${buildQuery(filters)}`, accessToken);
   },
 };

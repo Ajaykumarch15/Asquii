@@ -128,7 +128,19 @@ def _invitation_response(invitation: WorkspaceInvitation) -> dict[str, object]:
 def create_workspace(db: Session, user: CurrentUser, name: str) -> tuple[Workspace, str]:
     with db.begin():
         provision_profile(db, user)
-        workspace = Workspace(name=name, slug=_slug(name))
+        # RLS note: INSERT ... RETURNING is checked against the workspaces
+        # SELECT policy, and the creator is not a member until the membership
+        # row below is written. Supplying the id and timestamps keeps this
+        # INSERT from needing RETURNING; the membership then makes the
+        # workspace readable for the rest of the transaction.
+        now = datetime.now(UTC)
+        workspace = Workspace(
+            id=uuid4(),
+            name=name,
+            slug=_slug(name),
+            created_at=now,
+            updated_at=now,
+        )
         db.add(workspace)
         db.flush()
         membership = WorkspaceMember(

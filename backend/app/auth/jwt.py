@@ -20,6 +20,14 @@ ASYMMETRIC_ALGORITHMS = ("ES256", "RS256")
 JWKS_PATH = "/auth/v1/.well-known/jwks.json"
 UNKNOWN_TOKEN_MESSAGE = "Invalid or expired access token"
 
+# Supabase stamps `iat` with one-second granularity from its own clock. PyJWT
+# 2.10 rejects a token whose `iat` is even a moment in the future, so a client
+# clock that is slightly behind Supabase makes a freshly issued token fail
+# with ImmatureSignatureError (surfacing as an immediate 401 after sign-in).
+# A small bounded leeway absorbs that skew for `iat`, `nbf` and `exp`.
+# 30s stays well inside the existing "expired token is rejected" test window.
+JWT_LEEWAY_SECONDS = 30
+
 
 class TokenVerificationError(Exception):
     """A token failed validation without exposing sensitive parsing details."""
@@ -152,6 +160,7 @@ class SupabaseJWTVerifier:
                 algorithms=allowed_algorithms,
                 audience=self.settings.supabase_jwt_audience,
                 issuer=self.issuer,
+                leeway=JWT_LEEWAY_SECONDS,
                 options={"require": ["exp", "sub", "iss", "aud"]},
             )
         except (jwt.PyJWTError, ValueError, TypeError) as exc:

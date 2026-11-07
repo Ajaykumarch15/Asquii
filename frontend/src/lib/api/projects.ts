@@ -34,6 +34,15 @@ export type ProjectListFilters = {
   offset?: number;
 };
 
+/** PATCH contract: any non-empty subset; only `manual_progress` may be null. */
+export type ProjectUpdateInput = {
+  name?: string;
+  description?: string;
+  status?: ApiProjectStatus;
+  progress_mode?: ApiProgressMode;
+  manual_progress?: number | null;
+};
+
 /**
  * Tasks under `GET/POST /workspaces/{wid}/projects/{pid}/tasks`.
  * `due_date` is calendar-only (YYYY-MM-DD). `position` is a Decimal the
@@ -97,10 +106,29 @@ export interface ProjectsApi {
   listProjects(accessToken: string, workspaceId: string, filters?: ProjectListFilters): Promise<ApiProject[]>;
   createProject(accessToken: string, workspaceId: string, input: { name: string; description?: string; status?: ApiProjectStatus; progress_mode?: ApiProgressMode; manual_progress?: number }): Promise<ApiProject>;
   getProject(accessToken: string, workspaceId: string, projectId: string): Promise<ApiProject>;
-  renameProject(accessToken: string, workspaceId: string, projectId: string, name: string): Promise<ApiProject>;
+  /**
+   * PATCH /workspaces/{wid}/projects/{pid} — manager-only (`can_manage_settings`).
+   * Backend rejects an empty patch and nulls on every field except `manual_progress`.
+   */
+  updateProject(accessToken: string, workspaceId: string, projectId: string, patch: ProjectUpdateInput): Promise<ApiProject>;
+  /** POST /workspaces/{wid}/projects/{pid}/archive — 204; manager-only. */
+  archiveProject(accessToken: string, workspaceId: string, projectId: string): Promise<void>;
   listProjectMembers(accessToken: string, workspaceId: string, projectId: string): Promise<ApiProjectMember[]>;
+  /**
+   * POST /members {user_id, role} — manager-only; target must be an active
+   * workspace member (422 otherwise) and not already a project member (409).
+   */
+  addProjectMember(accessToken: string, workspaceId: string, projectId: string, input: { user_id: string; role: ApiProjectRole }): Promise<ApiProjectMember>;
+  /** PATCH /members/{user_id}/role — manager-only. */
+  updateProjectMemberRole(accessToken: string, workspaceId: string, projectId: string, userId: string, role: ApiProjectRole): Promise<ApiProjectMember>;
+  /** DELETE /members/{user_id} — manager-only for others; anyone may remove (leave) themselves. */
+  removeProjectMember(accessToken: string, workspaceId: string, projectId: string, userId: string): Promise<void>;
   listMilestones(accessToken: string, workspaceId: string, projectId: string): Promise<ApiMilestone[]>;
   createMilestone(accessToken: string, workspaceId: string, projectId: string, input: { name: string; due_date: string }): Promise<ApiMilestone>;
+  /** PATCH /milestones/{id} — manager-only; at least one non-null field required. */
+  updateMilestone(accessToken: string, workspaceId: string, projectId: string, milestoneId: string, patch: { name?: string; due_date?: string }): Promise<ApiMilestone>;
+  /** DELETE /milestones/{id} — 204; manager-only. */
+  deleteMilestone(accessToken: string, workspaceId: string, projectId: string, milestoneId: string): Promise<void>;
   listTasks(accessToken: string, workspaceId: string, projectId: string, filters?: TaskListFilters): Promise<ApiTask[]>;
   createTask(accessToken: string, workspaceId: string, projectId: string, input: {
     title: string;
@@ -109,6 +137,8 @@ export interface ProjectsApi {
     priority?: ApiTaskPriority;
     due_date?: string | null;
     assignee_user_id?: string | null;
+    /** Decimal ordering key; board quick-add appends past the column end. */
+    position?: number;
   }): Promise<ApiTask>;
   updateTask(accessToken: string, workspaceId: string, projectId: string, taskId: string, patch: {
     status?: ApiTaskStatus;
@@ -117,6 +147,8 @@ export interface ProjectsApi {
     assignee_user_id?: string | null;
     title?: string;
     description?: string;
+    /** Decimal ordering key; same-column reorders send only this field. */
+    position?: number;
   }): Promise<ApiTask>;
   deleteTask(accessToken: string, workspaceId: string, projectId: string, taskId: string): Promise<void>;
   getTaskDetail(accessToken: string, workspaceId: string, projectId: string, taskId: string): Promise<ApiTaskDetail>;
@@ -295,17 +327,35 @@ export const projectsApi: ProjectsApi = {
   async getProject(accessToken: string, workspaceId: string, projectId: string) {
     return apiGet<ApiProject>(`/workspaces/${workspaceId}/projects/${projectId}`, accessToken);
   },
-  async renameProject(accessToken: string, workspaceId: string, projectId: string, name: string) {
-    return apiPatch<ApiProject>(`/workspaces/${workspaceId}/projects/${projectId}`, { name }, accessToken);
+  async updateProject(accessToken: string, workspaceId: string, projectId: string, patch: ProjectUpdateInput) {
+    return apiPatch<ApiProject>(`/workspaces/${workspaceId}/projects/${projectId}`, patch, accessToken);
+  },
+  async archiveProject(accessToken: string, workspaceId: string, projectId: string) {
+    return apiPost<void>(`/workspaces/${workspaceId}/projects/${projectId}/archive`, {}, accessToken);
   },
   async listProjectMembers(accessToken: string, workspaceId: string, projectId: string) {
     return apiGet<ApiProjectMember[]>(`/workspaces/${workspaceId}/projects/${projectId}/members`, accessToken);
+  },
+  async addProjectMember(accessToken: string, workspaceId: string, projectId: string, input: { user_id: string; role: ApiProjectRole }) {
+    return apiPost<ApiProjectMember>(`/workspaces/${workspaceId}/projects/${projectId}/members`, input, accessToken);
+  },
+  async updateProjectMemberRole(accessToken: string, workspaceId: string, projectId: string, userId: string, role: ApiProjectRole) {
+    return apiPatch<ApiProjectMember>(`/workspaces/${workspaceId}/projects/${projectId}/members/${userId}/role`, { role }, accessToken);
+  },
+  async removeProjectMember(accessToken: string, workspaceId: string, projectId: string, userId: string) {
+    return apiDelete(`/workspaces/${workspaceId}/projects/${projectId}/members/${userId}`, accessToken);
   },
   async listMilestones(accessToken: string, workspaceId: string, projectId: string) {
     return apiGet<ApiMilestone[]>(`/workspaces/${workspaceId}/projects/${projectId}/milestones`, accessToken);
   },
   async createMilestone(accessToken: string, workspaceId: string, projectId: string, input) {
     return apiPost<ApiMilestone>(`/workspaces/${workspaceId}/projects/${projectId}/milestones`, input, accessToken);
+  },
+  async updateMilestone(accessToken: string, workspaceId: string, projectId: string, milestoneId: string, patch: { name?: string; due_date?: string }) {
+    return apiPatch<ApiMilestone>(`/workspaces/${workspaceId}/projects/${projectId}/milestones/${milestoneId}`, patch, accessToken);
+  },
+  async deleteMilestone(accessToken: string, workspaceId: string, projectId: string, milestoneId: string) {
+    return apiDelete(`/workspaces/${workspaceId}/projects/${projectId}/milestones/${milestoneId}`, accessToken);
   },
   async listTasks(accessToken: string, workspaceId: string, projectId: string, filters?: TaskListFilters) {
     return apiGet<ApiTask[]>(`/workspaces/${workspaceId}/projects/${projectId}/tasks${buildTaskQuery(filters)}`, accessToken);

@@ -26,8 +26,12 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     database_url: SecretStr | None = None
     database_migrate_url: SecretStr | None = None
-    database_pool_size: int = Field(default=3, ge=1, le=20)
-    database_max_overflow: int = Field(default=2, ge=0, le=20)
+    # Pool sized for the bursty read patterns of the dashboard UI (a signed-in
+    # home or projects load fires ~35-40 parallel list requests); a 3-connection
+    # pool made most of them queue on pool_timeout. DATABASE_URL users with a
+    # restrictive server-side pool cap can still override via env.
+    database_pool_size: int = Field(default=10, ge=1, le=20)
+    database_max_overflow: int = Field(default=5, ge=0, le=20)
     database_pool_timeout: int = Field(default=5, ge=1, le=60)
     database_connect_timeout: int = Field(default=5, ge=1, le=60)
     supabase_url: str | None = None

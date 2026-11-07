@@ -7,22 +7,25 @@
  * workspace settings (rename, archive), and project entry points.
  */
 
-import { useEffect, useState, type FormEvent } from "react";
-import { Activity as ActivityIcon, Archive, BriefcaseBusiness, Copy, Loader2, Pencil, Plus, Trash2, Users } from "lucide-react";
-import { Badge, Button, EmptyState, ErrorState, LoadingState, Select, Textarea, TextInput } from "./ui";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { AlertCircle, Archive, ArrowRight, ArrowUpRight, BriefcaseBusiness, CheckCircle2, ChevronLeft, ChevronRight, CircleDot, Copy, Crown, Download, FileText, FolderKanban, Gauge, Loader2, Mail, Pencil, Plus, Search, Trash2, Users } from "lucide-react";
+import { AvatarGroup, Badge, Button, EmptyState, ErrorState, LoadingState, Select, Tabs, Textarea, TextInput } from "./ui";
 import { friendlyError } from "../lib/api/client";
 import { activitiesApi, activityText, type ApiActivity } from "../lib/api/activities";
 import {
   projectsApi,
+  type ApiMilestone,
   type ApiProject,
+  type ApiProjectMember,
   type ApiProjectStatus,
   type ApiProgressMode,
+  type ApiResource,
+  type ApiTask,
 } from "../lib/api/projects";
 import { workspaceApi, type ApiInvitation, type ApiWorkspace, type ApiWorkspaceMember, type EditableWorkspaceRole } from "../lib/api/workspace";
 import type { WorkspaceState } from "../lib/real/useRealWorkspaces";
 
 const roleBadgeTone = { Owner: "brand", Admin: "warning", Member: "neutral" } as const;
-const projectStatusTone = { "In progress": "brand", "In review": "warning", Complete: "success" } as const;
 const PROJECT_STATUSES: ApiProjectStatus[] = ["In progress", "In review", "Complete"];
 const inviteStatusTone: Record<ApiInvitation["status"], "warning" | "success" | "neutral" | "danger"> = {
   pending: "warning",
@@ -52,13 +55,71 @@ function shortDateTime(value: string): string {
 /** Feed page size: one screen of events plus explicit "Load more" paging. */
 const ACTIVITY_PAGE_SIZE = 8;
 
-export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUserId, onOpenProject, section = "home" }: {
+/**
+ * Dashboard aggregation budget. The backend has no workspace-wide analytics
+ * endpoint, so progress/health come from per-project task lists; cap how many
+ * projects are profiled to keep the dashboard fetch bounded.
+ */
+const MAX_DASHBOARD_PROJECTS = 20;
+const FEATURED_PROJECTS = 5;
+
+type WorkspaceDetail = {
+  tasks: Record<string, ApiTask[]>;
+  milestones: Record<string, ApiMilestone[]>;
+  projectMembers: Record<string, ApiProjectMember[]>;
+  resources: ApiResource[];
+};
+
+type ProjectHealth = "At risk" | "Needs attention" | "On track";
+
+const healthTone: Record<ProjectHealth, "danger" | "warning" | "success"> = {
+  "At risk": "danger",
+  "Needs attention": "warning",
+  "On track": "success",
+};
+
+/** Prototype parity (model.ts teamFor): bucket member job titles for the Teams metric. */
+const teamFor = (jobTitle: string) =>
+  /design|product|ux|research/i.test(jobTitle) ? "Product & UX"
+    : /qa|test/i.test(jobTitle) ? "QA & Testing"
+      : /engineer|develop|backend|frontend|engineering/i.test(jobTitle) ? "Engineering"
+        : "Operations";
+
+function startOfToday() {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+/** Mirrors model.ts projectProgress against real task rows. */
+function progressFor(project: ApiProject, tasks: ApiTask[]) {
+  if (project.progress_mode === "manual") return project.manual_progress ?? 0;
+  if (tasks.length === 0) return 0;
+  return Math.round((tasks.filter(task => task.status === "Complete").length / tasks.length) * 100);
+}
+
+/** Mirrors model.ts projectHealth against real task rows. */
+function healthFor(tasks: ApiTask[]): ProjectHealth {
+  if (tasks.some(task =>
+    task.status !== "Complete" &&
+    task.due_date !== null &&
+    new Date(`${task.due_date}T00:00:00`) < startOfToday(),
+  )) return "At risk";
+  if (tasks.some(task => task.status === "In review")) return "Needs attention";
+  return "On track";
+}
+
+export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUserId, onOpenProject, onViewProjects, onViewPeople, section = "home" }: {
   workspaceState: WorkspaceState;
   getAccessToken: () => Promise<string | null>;
   /** Signed-in user's id; used to distinguish "Leave" from "Remove" in the people list. */
   identityUserId: string;
   /** Drill into a project from the home overview (switches to the Projects route). */
   onOpenProject: (projectId: string) => void;
+  /** Header/panel buttons that jump to the workspace Projects page. */
+  onViewProjects: () => void;
+  /** Header "Invite people" — jumps to the workspace People page. */
+  onViewPeople: () => void;
   /** "people"/"settings" render just that sidebar page; "home" is the full overview. */
   section?: "home" | "people" | "settings";
 }) {
@@ -80,6 +141,15 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
   const [renameName, setRenameName] = useState("");
   const [renameSubmitting, setRenameSubmitting] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
+  // People section view state (prototype PeoplePage parity): tabs, filters,
+  // pagination, and Owner-only bulk role selection.
+  const [peopleTab, setPeopleTab] = useState<"members" | "invitations" | "roles">("members");
+  const [peopleSearch, setPeopleSearch] = useState("");
+  const [peopleRoleFilter, setPeopleRoleFilter] = useState("all");
+  const [peopleProjectFilter, setPeopleProjectFilter] = useState("all");
+  const [peoplePage, setPeoplePage] = useState(1);
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [busyMemberId, setBusyMemberId] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -101,14 +171,22 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
   const [projectManualProgress, setProjectManualProgress] = useState(0);
   const [projectSubmitting, setProjectSubmitting] = useState(false);
   const [projectFormError, setProjectFormError] = useState<string | null>(null);
+  // Dashboard detail: per-project tasks/milestones/members plus merged
+  // resources, keyed by project id (the members endpoint rows lack project_id).
+  const [detail, setDetail] = useState<WorkspaceDetail | null>(null);
 
   useEffect(() => {
     if (!workspaceState.selected) return;
     const workspaceId = workspaceState.selected.id;
+    // Members get 403 from GET /invitations; skip the call instead of
+    // surfacing an "invitations unavailable" error for a feature they
+    // cannot use anyway.
+    const canSeeInvitations = workspaceState.selected.role === "Owner" || workspaceState.selected.role === "Admin";
     let disposed = false;
     setMembersState("loading");
     setMembers(null);
-    setInvitationsState("loading");
+    setInvitationsState(canSeeInvitations ? "loading" : "ready");
+    if (!canSeeInvitations) setInvitations([]);
     setActivityState("loading");
     setActivities(null);
     setProjectsState(previous => (previous === "ready" ? previous : "loading"));
@@ -116,48 +194,66 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
     void (async () => {
       const token = await getAccessToken();
       if (!token) return;
-      try {
-        const rows = await workspaceApi.listMembers(token, workspaceId);
-        if (disposed) return;
-        setMembers(rows);
-        setMembersState("ready");
-      } catch {
-        if (!disposed) setMembersState("error");
-      }
-      try {
-        const invites = await workspaceApi.listInvitations(token, workspaceId);
-        if (disposed) return;
-        setInvitations(invites);
-        setInvitationsState("ready");
-      } catch (error) {
-        if (disposed) return;
-        const friendly = friendlyError(error, "Could not load invitations");
-        setInvitationsState("error");
-        setNotice({ tone: "error", text: `Invitations unavailable: ${friendly.message}` });
-      }
-      try {
-        const rows = await projectsApi.listProjects(token, workspaceId, { limit: 50 });
-        if (disposed) return;
-        setProjects(rows);
-        setProjectsState("ready");
-      } catch (error) {
-        if (disposed) return;
-        const friendly = friendlyError(error, "Could not load projects");
-        setProjectsState("error");
-        setNotice({ tone: "error", text: `Projects unavailable: ${friendly.message}` });
-      }
-      try {
-        const page = await activitiesApi.listWorkspaceActivities(token, workspaceId, { limit: ACTIVITY_PAGE_SIZE });
-        if (disposed) return;
-        setActivities(page.items);
-        setActivityTotal(page.total);
-        setActivityState("ready");
-      } catch (error) {
-        if (disposed) return;
-        const friendly = friendlyError(error, "Could not load activity");
-        setActivityState("error");
-        setNotice({ tone: "error", text: `Recent activity unavailable: ${friendly.message}` });
-      }
+      // The four reads run concurrently: chaining them serially multiplied the
+      // load time by the number of round trips (members → invitations →
+      // projects → activity). Per-read try/catch keeps the original failure
+      // semantics — one dataset failing never takes the others down.
+      const loadMembers = async () => {
+        try {
+          const rows = await workspaceApi.listMembers(token, workspaceId);
+          if (disposed) return;
+          setMembers(rows);
+          setMembersState("ready");
+        } catch {
+          if (!disposed) setMembersState("error");
+        }
+      };
+      const loadInvitations = async () => {
+        try {
+          const invites = await workspaceApi.listInvitations(token, workspaceId);
+          if (disposed) return;
+          setInvitations(invites);
+          setInvitationsState("ready");
+        } catch (error) {
+          if (disposed) return;
+          const friendly = friendlyError(error, "Could not load invitations");
+          setInvitationsState("error");
+          setNotice({ tone: "error", text: `Invitations unavailable: ${friendly.message}` });
+        }
+      };
+      const loadProjects = async () => {
+        try {
+          const rows = await projectsApi.listProjects(token, workspaceId, { limit: 50 });
+          if (disposed) return;
+          setProjects(rows);
+          setProjectsState("ready");
+        } catch (error) {
+          if (disposed) return;
+          const friendly = friendlyError(error, "Could not load projects");
+          setProjectsState("error");
+          setNotice({ tone: "error", text: `Projects unavailable: ${friendly.message}` });
+        }
+      };
+      const loadActivities = async () => {
+        try {
+          const page = await activitiesApi.listWorkspaceActivities(token, workspaceId, { limit: ACTIVITY_PAGE_SIZE });
+          if (disposed) return;
+          setActivities(page.items);
+          setActivityTotal(page.total);
+          setActivityState("ready");
+        } catch (error) {
+          if (disposed) return;
+          const friendly = friendlyError(error, "Could not load activity");
+          setActivityState("error");
+          setNotice({ tone: "error", text: `Recent activity unavailable: ${friendly.message}` });
+        }
+      };
+      await Promise.all([
+        loadMembers(),
+        canSeeInvitations ? loadInvitations() : Promise.resolve(),
+        loadProjects(),
+        loadActivities(),
+      ]);
     })();
 
     return () => { disposed = true; };
@@ -281,6 +377,42 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
     }
   }
 
+  /**
+   * Owner-only bulk role change (the backend role endpoint is owner-only).
+   * Runs sequentially and reports per-member failures; the server is the
+   * source of truth for rules like the last-admin rejection.
+   */
+  async function bulkChangeRole(next: EditableWorkspaceRole) {
+    if (!workspace || selectedMemberIds.length === 0) return;
+    setBulkBusy(true);
+    const failures: string[] = [];
+    let changed = 0;
+    try {
+      for (const userId of selectedMemberIds) {
+        const member = (members ?? []).find(row => row.user_id === userId);
+        if (!member || member.role === next || member.role === "Owner") continue;
+        try {
+          const token = await getAccessToken();
+          if (!token) throw new Error("Sign-in session ended. Please sign in again.");
+          await workspaceApi.updateMemberRole(token, workspace.id, member.user_id, next);
+          changed += 1;
+        } catch {
+          failures.push(member.display_name);
+        }
+      }
+    } finally {
+      if (changed > 0 || failures.length > 0) setReloadToken(value => value + 1);
+      setNotice({
+        tone: failures.length === 0 ? "success" : "error",
+        text: failures.length === 0
+          ? `Updated ${changed} member${changed === 1 ? "" : "s"} to ${next === "Admin" ? "Admin" : "Member"}.`
+          : `Updated ${changed}, could not update: ${failures.join(", ")}.`,
+      });
+      setSelectedMemberIds([]);
+      setBulkBusy(false);
+    }
+  }
+
   async function removeMemberAction(member: ApiWorkspaceMember) {
     if (!workspace) return;
     const selfRemoval = member.user_id === identityUserId;
@@ -397,7 +529,92 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
     setProjectsState("loading");
     setProjectFormOpen(false);
     setProjectFormError(null);
+    setDetail(null);
   }, [workspaceState.selected?.id]);
+
+  // Dashboard session: per-project tasks for the first MAX_DASHBOARD_PROJECTS
+  // non-archived projects (the stats cap), plus milestones/members/resources
+  // only for the FEATURED projects that render them — the per-project burst is
+  // what the DB connection pool has to absorb, so it is kept as small as the
+  // visible data allows. Each lookup is independent, so failures degrade per
+  // project rather than taking the whole dashboard down.
+  useEffect(() => {
+    if (projectsState !== "ready" || !projects) return;
+    const workspaceId = workspaceState.selected?.id;
+    if (!workspaceId) return;
+    const targets = projects.filter(project => !project.archived_at).slice(0, MAX_DASHBOARD_PROJECTS);
+    const featured = targets.slice(0, FEATURED_PROJECTS);
+    if (targets.length === 0) {
+      setDetail({ tasks: {}, milestones: {}, projectMembers: {}, resources: [] });
+      return;
+    }
+    let disposed = false;
+    void (async () => {
+      const token = await getAccessToken();
+      if (!token) return; // detached from shell data; by design for this read
+      const [taskResults, milestoneResults, memberResults, resourceResults] = await Promise.all([
+        Promise.allSettled(targets.map(project => projectsApi.listTasks(token, workspaceId, project.id, { limit: 100 }))),
+        Promise.allSettled(featured.map(project => projectsApi.listMilestones(token, workspaceId, project.id))),
+        Promise.allSettled(featured.map(project => projectsApi.listProjectMembers(token, workspaceId, project.id))),
+        Promise.allSettled(featured.map(project => projectsApi.listResources(token, workspaceId, project.id, { limit: 10 }))),
+      ]);
+      if (disposed) return;
+      const tasks: Record<string, ApiTask[]> = {};
+      const milestones: Record<string, ApiMilestone[]> = {};
+      const projectMembers: Record<string, ApiProjectMember[]> = {};
+      const resources: ApiResource[] = [];
+      targets.forEach((project, index) => {
+        const taskPage = taskResults[index];
+        if (taskPage.status === "fulfilled") tasks[project.id] = taskPage.value;
+      });
+      featured.forEach((project, index) => {
+        const milestonePage = milestoneResults[index];
+        if (milestonePage.status === "fulfilled") milestones[project.id] = milestonePage.value;
+        const memberPage = memberResults[index];
+        if (memberPage.status === "fulfilled") projectMembers[project.id] = memberPage.value;
+        const resourcePage = resourceResults[index];
+        if (resourcePage.status === "fulfilled") resources.push(...resourcePage.value);
+      });
+      setDetail({ tasks, milestones, projectMembers, resources });
+    })();
+    return () => { disposed = true; };
+  }, [workspaceState.selected?.id, projects, projectsState, getAccessToken, reloadToken]);
+
+  // Workspace analytics mirror the prototype overview's math (model.ts
+  // projectProgress/projectHealth) but always recompute from real rows.
+  const analytics = useMemo(() => {
+    if (!detail) return null;
+    const activeProjects = (projects ?? []).filter(project => !project.archived_at).slice(0, MAX_DASHBOARD_PROJECTS);
+    const rows = activeProjects.map(project => {
+      const tasks = detail.tasks[project.id] ?? [];
+      return { project, progress: progressFor(project, tasks), health: healthFor(tasks) };
+    });
+    const tasks = rows.flatMap(row => detail.tasks[row.project.id] ?? []);
+    const openTasks = tasks.filter(task => task.status !== "Complete");
+    const today = startOfToday();
+    return {
+      rows,
+      taskCount: tasks.length,
+      completed: tasks.filter(task => task.status === "Complete").length,
+      inProgress: tasks.filter(task => task.status === "In progress").length,
+      todo: tasks.filter(task => task.status === "To do" || task.status === "Backlog").length,
+      overdue: openTasks.filter(task => task.due_date !== null && new Date(`${task.due_date}T00:00:00`) < today).length,
+      open: openTasks.length,
+      overall: rows.length ? Math.round(rows.reduce((sum, row) => sum + row.progress, 0) / rows.length) : 0,
+      teams: new Set((members ?? []).filter(member => member.job_title).map(member => teamFor(member.job_title as string))).size,
+      featured: rows.slice(0, FEATURED_PROJECTS),
+      activeRows: rows.slice(0, FEATURED_PROJECTS).map(row => ({
+        project: row.project,
+        progress: row.progress,
+        members: (detail.projectMembers[row.project.id] ?? []).map(member => member.display_name),
+        nextMilestone: [...(detail.milestones[row.project.id] ?? [])].sort((a, b) => a.due_date.localeCompare(b.due_date))[0] ?? null,
+      })),
+      resources: detail.resources
+        .slice()
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+        .slice(0, 4),
+    };
+  }, [detail, projects, members]);
 
   // Keep the rename field aligned with the currently selected workspace.
   useEffect(() => {
@@ -490,7 +707,55 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
 
   const isAdmin = workspace.role === "Owner" || workspace.role === "Admin";
   const isOwner = workspace.role === "Owner";
-  const pendingCount = invitations.filter(item => item.status === "pending").length;
+
+  // People section derivation (prototype PeoplePage parity, real data).
+  // project/open-task counts reuse the dashboard detail budget (first
+  // MAX_DASHBOARD_PROJECTS projects) — no extra requests.
+  const sortedMembers = [...(members ?? [])].sort((a, b) => a.display_name.localeCompare(b.display_name));
+  const admins = sortedMembers.filter(member => member.role === "Admin");
+  const owners = sortedMembers.filter(member => member.role === "Owner");
+  const pendingInviteCount = invitations.filter(invitation => invitation.status === "pending").length;
+  const profiles = detail?.projectMembers ?? {};
+  const projectCountFor = (userId: string) => Object.values(profiles).filter(rows => rows.some(row => row.user_id === userId)).length;
+  const projectNamesForMember = (userId: string) => Object.entries(profiles).filter(([, rows]) => rows.some(row => row.user_id === userId)).map(([projectId]) => (projects ?? []).find(project => project.id === projectId)?.name).filter((name): name is string => Boolean(name));
+  const openTasksFor = (userId: string) => Object.values(detail?.tasks ?? {}).reduce((total, rows) => total + rows.filter(task => task.assignee_user_id === userId && task.status !== "Complete").length, 0);
+  const projectMemberCount = sortedMembers.filter(member => projectCountFor(member.user_id) > 0).length;
+  const profileCapped = (projects ?? []).length > MAX_DASHBOARD_PROJECTS;
+  const peopleFiltered = sortedMembers.filter(member =>
+    `${member.display_name} ${member.job_title ?? ""}`.toLowerCase().includes(peopleSearch.trim().toLowerCase())
+    && (peopleRoleFilter === "all" || member.role === peopleRoleFilter)
+    && (peopleProjectFilter === "all" || (profiles[peopleProjectFilter]?.some(row => row.user_id === member.user_id) ?? false)));
+  const PEOPLE_PAGE_SIZE = 6;
+  const peoplePageCount = Math.max(1, Math.ceil(peopleFiltered.length / PEOPLE_PAGE_SIZE));
+  const currentPeoplePage = Math.min(peoplePage, peoplePageCount);
+  const peopleRows = peopleFiltered.slice((currentPeoplePage - 1) * PEOPLE_PAGE_SIZE, currentPeoplePage * PEOPLE_PAGE_SIZE);
+  const jobTitleCounts = [...new Set(sortedMembers.filter(member => member.job_title).map(member => member.job_title as string))]
+    .map(title => ({ title, count: sortedMembers.filter(member => member.job_title === title).length }))
+    .sort((a, b) => b.count - a.count || a.title.localeCompare(b.title));
+  const peopleTabs = [`Members (${members?.length ?? 0})`, `Invitations (${invitations.length})`, "Roles & access"] as const;
+  const peopleProfileNote = profileCapped ? `Project and open-task counts cover the first ${MAX_DASHBOARD_PROJECTS} projects.` : null;
+
+  function toggleAllVisible(checked: boolean) {
+    setSelectedMemberIds(previous => checked
+      ? [...new Set([...previous, ...peopleRows.filter(member => member.role !== "Owner").map(member => member.user_id)])]
+      : previous.filter(id => !peopleRows.some(member => member.user_id === id)));
+  }
+
+  function exportPeopleCsv() {
+    const lines = [["Member", "Job title", "Workspace role", "Projects", "Open tasks"], ...peopleFiltered.map(member => [
+      member.display_name,
+      member.job_title ?? "",
+      member.role,
+      String(projectCountFor(member.user_id)),
+      String(openTasksFor(member.user_id)),
+    ])];
+    const csv = lines.map(line => line.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    link.download = "workspace-members.csv";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
 
   return (
     <div className="space-y-6">
@@ -504,19 +769,36 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
           </Button>
         </div>
       )}
-      <div className="rounded-2xl border border-line bg-surface p-5 sm:p-6">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="grid h-12 w-12 place-items-center rounded-2xl bg-brand text-lg font-semibold text-white"><BriefcaseBusiness size={20} /></span>
-          <div className="min-w-0 flex-1">
-            <h1 className="text-xl font-bold tracking-tight">{workspace.name}</h1>
-            <p className="mt-0.5 text-xs text-muted">asquii.com/{workspace.slug}</p>
+      <section className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-brand text-sm font-semibold text-white">
+            {workspace.name.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase()}
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="truncate text-xl font-semibold tracking-tight text-heading">{workspace.name}</h1>
+              <Badge tone={roleBadgeTone[workspace.role]}>{workspace.role}</Badge>
+            </div>
+            <p className="mt-1 truncate text-xs text-muted">asquii.com/{workspace.slug} · Workspace overview across your projects.</p>
           </div>
-          <Badge tone={roleBadgeTone[workspace.role]}>{workspace.role}</Badge>
-          {invitationsState === "ready" && <Badge tone={pendingCount > 0 ? "warning" : "neutral"}>{pendingCount === 0 ? "No pending invitations" : `${pendingCount} pending invitation${pendingCount === 1 ? "" : "s"}`}</Badge>}
         </div>
-      </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {members && members.length > 0 && <AvatarGroup names={members.map(member => member.display_name)} />}
+          <Button variant="secondary" size="sm" icon={<Mail size={14} />} onClick={onViewPeople}>Invite people</Button>
+          {isAdmin && section === "home" && (
+            <Button
+              variant="primary"
+              size="sm"
+              icon={<Plus size={14} />}
+              onClick={() => { setProjectFormOpen(open => !open); setProjectFormError(null); }}
+            >
+              {projectFormOpen ? "Cancel" : "New project"}
+            </Button>
+          )}
+        </div>
+      </section>
 
-      {(section === "home" || section === "settings") && (
+      {section === "settings" && (
       <section className="space-y-3">
         <h2 className="text-sm font-semibold text-heading">Workspace settings</h2>
         {(isAdmin || isOwner) && (
@@ -569,75 +851,159 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
       </section>
       )}
 
-      {section !== "settings" && (<>
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-heading"><Users size={15} className="text-muted" />People ({members?.length ?? 0})</h2>
+      {section === "people" && (<>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-tight">People</h1>
+          <p className="mt-1.5 text-sm text-muted">Manage workspace members, roles and access across all projects in {workspace.name}.</p>
         </div>
-        {membersState === "loading" && <LoadingState label="Loading people" />}
-        {membersState === "error" && (
-          <ErrorState
-            title="People could not be loaded"
-            description="Membership details are temporarily unavailable."
-            action={<Button onClick={() => setReloadToken(token => token + 1)}>Retry</Button>}
+        <div className="flex flex-wrap items-center gap-2">
+          {(members?.length ?? 0) > 0 && <Button variant="secondary" size="sm" icon={<Download size={14} />} onClick={exportPeopleCsv} aria-label="Export members as CSV">Export</Button>}
+          {isAdmin && <Button variant="secondary" size="sm" icon={<Mail size={14} />} onClick={() => { setPeopleTab("invitations"); setInviteFormOpen(true); setCreatedToken(null); }}>Invite people</Button>}
+          {isAdmin && <Button variant="primary" size="sm" icon={<Plus size={14} />} onClick={() => { setPeopleTab("invitations"); setInviteFormOpen(true); setCreatedToken(null); }}>Add member</Button>}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <PeopleStat icon={<Users size={17} />} label="Total members" value={members?.length ?? 0} />
+        <PeopleStat icon={<Crown size={17} />} label="Workspace admins" value={admins.length + owners.length} />
+        <PeopleStat icon={<CheckCircle2 size={17} />} label="On project teams" value={projectMemberCount} />
+        <PeopleStat icon={<Mail size={17} />} label="Pending invitations" value={pendingInviteCount} />
+      </div>
+      <section className="overflow-hidden rounded-xl border border-line bg-surface">
+        <div className="border-b border-line px-4 pt-3 sm:px-5">
+          <Tabs
+            items={[...peopleTabs]}
+            active={peopleTab === "members" ? peopleTabs[0] : peopleTab === "invitations" ? peopleTabs[1] : peopleTabs[2]}
+            onChange={item => setPeopleTab(item.startsWith("Members") ? "members" : item.startsWith("Invitations") ? "invitations" : "roles")}
           />
+        </div>
+        {peopleTab === "members" && (
+        <div>
+          <div className="grid gap-2 border-b border-line p-4 sm:px-5 lg:grid-cols-[minmax(220px,1fr)_140px_170px_140px]">
+            <TextInput icon={<Search size={15} />} placeholder="Search members by name or title…" aria-label="Search members" value={peopleSearch} onChange={event => { setPeopleSearch(event.target.value); setPeoplePage(1); }} />
+            <Select aria-label="Filter by workspace role" value={peopleRoleFilter} onChange={event => { setPeopleRoleFilter(event.target.value); setPeoplePage(1); }}>
+              <option value="all">All roles</option>
+              {(["Owner", "Admin", "Member"] as const).filter(role => sortedMembers.some(member => member.role === role)).map(role => <option key={role} value={role}>{role}s</option>)}
+            </Select>
+            <Select aria-label="Filter by project" value={peopleProjectFilter} onChange={event => { setPeopleProjectFilter(event.target.value); setPeoplePage(1); }}>
+              <option value="all">All projects</option>
+              {(projects ?? []).map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+            </Select>
+            <Select aria-label="Filter by status" value="Active" title="Every listed member is active in this workspace"><option value="Active">Status: Active</option></Select>
+          </div>
+          {isOwner && selectedMemberIds.length > 0 && (
+            <div role="toolbar" aria-label="Bulk member actions" className="flex flex-wrap items-center gap-2 border-b border-line bg-brand-soft/40 px-4 py-2.5 sm:px-5">
+              <span className="text-xs font-medium text-brand-pressed">{selectedMemberIds.length} selected</span>
+              <Button size="sm" variant="secondary" disabled={bulkBusy} onClick={() => void bulkChangeRole("Admin")}>Make admin</Button>
+              <Button size="sm" variant="secondary" disabled={bulkBusy} onClick={() => void bulkChangeRole("Member")}>Make member</Button>
+              <button className="text-[11px] text-muted hover:text-heading" onClick={() => setSelectedMemberIds([])}>Clear</button>
+            </div>
+          )}
+          {membersState === "loading" && <LoadingState label="Loading people" />}
+          {membersState === "error" && (
+            <ErrorState
+              title="People could not be loaded"
+              description="Membership details are temporarily unavailable."
+              action={<Button onClick={() => setReloadToken(token => token + 1)}>Retry</Button>}
+            />
+          )}
+          {membersState === "ready" && peopleRows.length === 0 && (
+            <EmptyState title="No members match" description="Try a different search or clear the filters." />
+          )}
+          {membersState === "ready" && peopleRows.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="ui-table w-full min-w-[880px] border-collapse text-left">
+                <thead>
+                  <tr className="border-b border-line text-[10px] uppercase tracking-wide">
+                    {isOwner && <th className="w-10 px-4 py-3"><input type="checkbox" className="accent-brand" aria-label="Select visible members" checked={peopleRows.filter(member => member.role !== "Owner").every(member => selectedMemberIds.includes(member.user_id))} onChange={event => toggleAllVisible(event.target.checked)} /></th>}
+                    <th className="px-4 py-3 font-semibold">Member</th>
+                    <th className="px-4 py-3 font-semibold" title="Workspace-level access set by the Owner">Role</th>
+                    <th className="px-4 py-3 font-semibold" title="Projects this member belongs to">Projects</th>
+                    <th className="px-4 py-3 font-semibold">Status</th>
+                    <th className="px-4 py-3 font-semibold" title="Open tasks currently assigned">Open tasks</th>
+                    <th className="px-4 py-3 text-right font-semibold">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {peopleRows.map(member => {
+                    const self = member.user_id === identityUserId;
+                    const busy = bulkBusy || busyMemberId === member.user_id;
+                    // Role editing is Owner-only (the backend rejects it for everyone else);
+                    // the Owner member itself is excluded — ownership moves via transfer.
+                    const roleEditable = isOwner && !self && (member.role === "Admin" || member.role === "Member");
+                    // Removal mirrors the service rules: self-leave for Admin/Member,
+                    // the Owner removes Admins and Members, Admins remove Members only.
+                    const canRemove = self ? workspace.role !== "Owner" : isOwner || (isAdmin && member.role === "Member");
+                    const projectCount = projectCountFor(member.user_id);
+                    const projectNames = projectNamesForMember(member.user_id);
+                    return (
+                      <tr key={member.user_id} className={`border-b border-line last:border-0 ${selectedMemberIds.includes(member.user_id) ? "bg-brand-soft/40" : ""}`}>
+                        {isOwner && (
+                          <td className="px-4 py-3.5">
+                            {member.role !== "Owner" && <input type="checkbox" className="accent-brand" aria-label={`Select ${member.display_name}`} checked={selectedMemberIds.includes(member.user_id)} onChange={() => setSelectedMemberIds(previous => previous.includes(member.user_id) ? previous.filter(id => id !== member.user_id) : [...previous, member.user_id])} />}
+                          </td>
+                        )}
+                        <td className="px-4 py-3.5">
+                          <div className="flex items-center gap-3">
+                            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-hover text-[10px] font-semibold text-secondary">
+                              {member.display_name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase()}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-semibold text-heading">{member.display_name}{self && <span className="ml-1 text-[10px] text-muted">(you)</span>}</p>
+                              <p className="truncate text-[10px] text-muted">{member.job_title ?? "No title yet"}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          {roleEditable ? (
+                            <Select aria-label={`Role for ${member.display_name}`} className="w-24" value={member.role} disabled={busy} onChange={event => void changeRole(member, event.target.value as EditableWorkspaceRole)}>
+                              <option value="Member">Member</option>
+                              <option value="Admin">Admin</option>
+                            </Select>
+                          ) : (
+                            <Badge tone={roleBadgeTone[member.role as keyof typeof roleBadgeTone] ?? "neutral"}>{member.role}</Badge>
+                          )}
+                        </td>
+                        <td className="px-4 py-3.5 text-xs text-secondary" title={projectNames.length > 0 ? projectNames.join(", ") : undefined}>{projectCount === 0 ? "—" : projectCount}{projectNames.length > 1 && <span className="ml-1 text-[10px] text-muted">projects</span>}</td>
+                        <td className="px-4 py-3.5"><Badge tone="success">Active</Badge></td>
+                        <td className="px-4 py-3.5 text-xs text-secondary">{openTasksFor(member.user_id)}</td>
+                        <td className="px-4 py-3.5 text-right">
+                          {canRemove && (
+                            <Button variant="ghost" size="sm" icon={busy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} aria-label={self ? `Leave ${workspace.name}` : `Remove ${member.display_name}`} disabled={busy} onClick={() => void removeMemberAction(member)}>
+                              {self ? "Leave" : "Remove"}
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {membersState === "ready" && peopleFiltered.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3 text-[11px] text-muted sm:px-5">
+              <span>Showing {(currentPeoplePage - 1) * PEOPLE_PAGE_SIZE + 1}–{Math.min(currentPeoplePage * PEOPLE_PAGE_SIZE, peopleFiltered.length)} of {peopleFiltered.length} members</span>
+              <div className="flex items-center gap-1">
+                <button className="icon-button" aria-label="Previous page" disabled={currentPeoplePage <= 1} onClick={() => setPeoplePage(currentPeoplePage - 1)}><ChevronLeft size={15} /></button>
+                {Array.from({ length: peoplePageCount }, (_, index) => index + 1).map(pageValue => <button key={pageValue} aria-label={`Go to page ${pageValue}`} aria-current={pageValue === currentPeoplePage ? "page" : undefined} onClick={() => setPeoplePage(pageValue)} className={`h-7 min-w-7 rounded-md px-2 text-[11px] font-medium transition ${pageValue === currentPeoplePage ? "bg-brand text-white" : "text-secondary hover:bg-hover"}`}>{pageValue}</button>)}
+                <button className="icon-button" aria-label="Next page" disabled={currentPeoplePage >= peoplePageCount} onClick={() => setPeoplePage(currentPeoplePage + 1)}><ChevronRight size={15} /></button>
+              </div>
+            </div>
+          )}
+          {peopleProfileNote && <p className="px-4 pb-3 text-[10px] text-muted sm:px-5">{peopleProfileNote}</p>}
+        </div>
         )}
-        {membersState === "ready" && members && (
-          <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {members.map(member => {
-              const self = member.user_id === identityUserId;
-              const busy = busyMemberId === member.user_id;
-              // Role editing is Owner-only (the backend rejects it for everyone else);
-              // the Owner member itself is excluded — ownership moves via transfer.
-              const roleEditable = isOwner && !self && (member.role === "Admin" || member.role === "Member");
-              // Removal mirrors the service rules: self-leave for Admin/Member,
-              // the Owner removes Admins and Members, Admins remove Members only.
-              const canRemove = self
-                ? workspace.role !== "Owner"
-                : isOwner || (isAdmin && member.role === "Member");
-              return (
-                <li key={member.user_id} className="flex flex-wrap items-center gap-3 rounded-xl border border-line bg-surface p-3">
-                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-hover text-[10px] font-semibold text-secondary">
-                    {member.display_name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase()}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-medium text-heading">{member.display_name}{self && <span className="ml-1 text-[10px] text-muted">(you)</span>}</span>
-                    <span className="block truncate text-[10px] text-muted">{member.job_title ?? "No title yet"}</span>
-                  </span>
-                  {roleEditable ? (
-                    <Select
-                      aria-label={`Role for ${member.display_name}`}
-                      className="w-24"
-                      value={member.role}
-                      disabled={busy}
-                      onChange={event => void changeRole(member, event.target.value as EditableWorkspaceRole)}
-                    >
-                      <option value="Member">Member</option>
-                      <option value="Admin">Admin</option>
-                    </Select>
-                  ) : (
-                    <Badge tone={roleBadgeTone[member.role as keyof typeof roleBadgeTone] ?? "neutral"}>{member.role}</Badge>
-                  )}
-                  {canRemove && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      aria-label={self ? `Leave ${workspace.name}` : `Remove ${member.display_name}`}
-                      disabled={busy}
-                      onClick={() => void removeMemberAction(member)}
-                    >
-                      {busy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
-                      {self ? "Leave" : "Remove"}
-                    </Button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+        {peopleTab === "roles" && (
+        <div className="grid gap-3 p-4 sm:px-5 sm:grid-cols-2 xl:grid-cols-4">
+          <article className="rounded-xl border border-line p-4"><span className="grid h-10 w-10 place-items-center rounded-xl bg-brand-soft text-brand"><Crown size={17} /></span><div className="mt-3 flex items-center justify-between"><p className="text-sm font-semibold">Owner</p><Badge tone="brand">{owners.length === 1 ? "1 member" : `${owners.length} members`}</Badge></div><p className="mt-2 text-[11px] leading-5 text-muted">Holds full control of the workspace; ownership moves only by transfer.</p><ul className="mt-3 space-y-1.5 text-[11px] text-secondary"><li>· Change member roles and remove members</li><li>· Archive the workspace</li><li>· Manages every project's settings</li></ul></article>
+          <article className="rounded-xl border border-line p-4"><span className="grid h-10 w-10 place-items-center rounded-xl bg-brand-soft text-brand"><AlertCircle size={17} /></span><div className="mt-3 flex items-center justify-between"><p className="text-sm font-semibold">Admin</p><Badge tone="warning">{admins.length === 1 ? "1 member" : `${admins.length} members`}</Badge></div><p className="mt-2 text-[11px] leading-5 text-muted">Runs day-to-day administration alongside the Owner.</p><ul className="mt-3 space-y-1.5 text-[11px] text-secondary"><li>· Invite teammates and create projects</li><li>· Remove members and revoke invitations</li><li>· Manages every project's settings</li></ul></article>
+          <article className="rounded-xl border border-line p-4"><span className="grid h-10 w-10 place-items-center rounded-xl bg-brand-soft text-brand"><Users size={17} /></span><div className="mt-3 flex items-center justify-between"><p className="text-sm font-semibold">Member</p><Badge>{sortedMembers.filter(member => member.role === "Member").length === 1 ? "1 member" : `${sortedMembers.filter(member => member.role === "Member").length} members`}</Badge></div><p className="mt-2 text-[11px] leading-5 text-muted">Works inside assigned projects without workspace administration.</p><ul className="mt-3 space-y-1.5 text-[11px] text-secondary"><li>· View and work on assigned projects</li><li>· Create and update tasks, join meetings</li><li>· Add resources to project libraries</li></ul></article>
+          <article className="rounded-xl border border-line p-4"><span className="grid h-10 w-10 place-items-center rounded-xl bg-brand-soft text-brand"><BriefcaseBusiness size={17} /></span><div className="mt-3 flex items-center justify-between"><p className="text-sm font-semibold">Job titles</p><Badge>{jobTitleCounts.length} {jobTitleCounts.length === 1 ? "title" : "titles"}</Badge></div><p className="mt-2 text-[11px] leading-5 text-muted">Titles across all workspace members.</p><div className="mt-3 space-y-1.5">{jobTitleCounts.map(item => <div key={item.title} className="flex items-center justify-between text-[11px]"><span className="truncate text-secondary">{item.title}</span><span className="font-medium text-muted">{item.count}</span></div>)}{jobTitleCounts.length === 0 && <p className="text-[11px] text-muted">No titles set yet.</p>}</div></article>
+        </div>
         )}
-      </section>
-
-      <section className="space-y-3">
+        {peopleTab === "invitations" && (
+          <div className="p-4 space-y-4 sm:px-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-heading">Invitations</h2>
           {isAdmin && invitationsState === "ready" && (
@@ -708,25 +1074,13 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
             ))}
           </ul>
         )}
+          </div>
+        )}
       </section>
       </>)}
 
       {section === "home" && (<>
-      <section className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-heading">Projects{projectsState === "ready" && projects ? ` (${projects.length})` : ""}</h2>
-          {isAdmin && (
-            <Button
-              size="sm"
-              icon={<Plus size={14} />}
-              onClick={() => { setProjectFormOpen(open => !open); setProjectFormError(null); }}
-            >
-              {projectFormOpen ? "Cancel" : "New project"}
-            </Button>
-          )}
-        </div>
-
-        {projectFormOpen && isAdmin && (
+        {isAdmin && projectFormOpen && (
           <form onSubmit={submitCreateProject} className="space-y-3 rounded-xl border border-line bg-surface p-4">
             <TextInput
               label="Project name"
@@ -773,96 +1127,249 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
           </form>
         )}
 
-        {projectsState === "loading" && <LoadingState label="Loading projects" />}
         {projectsState === "error" && (
           <ErrorState
-            title="Projects could not be loaded"
-            description="The project list is temporarily unavailable."
+            title="The dashboard could not be loaded"
+            description="Workspace projects are temporarily unavailable."
             action={<Button onClick={() => setReloadToken(token => token + 1)}>Retry</Button>}
           />
         )}
-        {projectsState === "ready" && projects?.length === 0 && (
-          <EmptyState
-            title="No projects yet"
-            description={isAdmin ? "Create the first project with New project above — you become its Project Manager." : "A workspace Owner or Admin sets up projects."}
-          />
+        {(projectsState === "loading" || (projectsState === "ready" && !detail)) && (
+          <LoadingState label="Loading workspace dashboard" />
         )}
-        {projectsState === "ready" && projects && projects.length > 0 && (
-          <ul className="divide-y divide-line rounded-xl border border-line bg-surface">
-            {projects.map(project => (
-              <li key={project.id} className="flex flex-wrap items-center gap-3 p-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="truncate text-xs font-semibold text-heading">{project.name}</p>
-                    <Badge tone={projectStatusTone[project.status]}>{project.status}</Badge>
-                    {project.archived_at && <Badge tone="danger">Archived</Badge>}
-                    {project.current_user_role && <Badge tone="neutral">{project.current_user_role}</Badge>}
-                  </div>
-                  {project.description && <p className="mt-0.5 line-clamp-1 text-[10px] text-muted">{project.description}</p>}
-                  <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted">
-                    <span>{project.member_count} member{project.member_count === 1 ? "" : "s"}</span>
-                    <span>Updated {shortDate(project.updated_at)}</span>
-                    {project.progress_mode === "manual" && project.manual_progress !== null && <span>{project.manual_progress}% manual progress</span>}
-                  </p>
-                </div>
-                <Button size="sm" aria-label={`Open project ${project.name}`} onClick={() => onOpenProject(project.id)}>
-                  Open
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
 
-      <section className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-heading"><ActivityIcon size={15} className="text-muted" />Recent activity</h2>
-          {activityState === "ready" && activities && activities.length > 0 && <Badge tone="neutral">Newest {activities.length} of {activityTotal}</Badge>}
-        </div>
-        {activityState !== "ready" && (activityState === "loading" ? <LoadingState label="Loading activity" /> : (
-          <ErrorState
-            title="Recent activity could not be loaded"
-            description="The activity feed is temporarily unavailable."
-            action={<Button onClick={() => setReloadToken(token => token + 1)}>Retry</Button>}
-          />
-        ))}
-        {activityState === "ready" && activities?.length === 0 && (
-          <EmptyState title="No activity yet" description="Actions taken in this workspace appear here — projects, tasks, meetings, and memberships." />
-        )}
-        {activityState === "ready" && activities && activities.length > 0 && (
-          <ul className="divide-y divide-line rounded-xl border border-line bg-surface">
-            {activities.map(activity => (
-              <li key={activity.id} className="flex flex-wrap items-start gap-3 p-3">
-                <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-hover">
-                  <ActivityIcon size={13} className="text-muted" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs text-secondary">
-                    <span className="font-semibold text-heading">{activity.actor_display_name?.trim() || "Someone"}</span>{" "}
-                    {activityText(activity)}
-                  </p>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-muted">
-                    <span>{shortDateTime(activity.created_at)}</span>
-                    <Badge tone="neutral">{activity.resource_type}</Badge>
-                    {!activity.actor_user_id && <span>System</span>}
+        {detail && analytics && (
+          <>
+            <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <OverviewMetric icon={<FolderKanban size={17} />} label="Projects" value={analytics.rows.length} note={`${analytics.inProgress} active`} tone="violet" />
+              <OverviewMetric icon={<Users size={17} />} label="People" value={members?.length ?? 0} note="Workspace members" tone="blue" />
+              <OverviewMetric icon={<Gauge size={17} />} label="Teams" value={analytics.teams} note="Across job titles" tone="orange" />
+              <OverviewMetric icon={<CheckCircle2 size={17} />} label="Tasks" value={analytics.taskCount} note={`${analytics.completed} completed · ${analytics.open} open`} tone="green" />
+            </section>
+
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+              <div className="space-y-4">
+                <section className="grid gap-4 lg:grid-cols-2">
+                  <article className="rounded-xl border border-line bg-surface p-5">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <h2 className="text-sm font-semibold text-heading">Workspace progress</h2>
+                        <p className="mt-1 text-xs text-muted">Average progress across all projects</p>
+                      </div>
+                      <span className="grid h-9 w-9 place-items-center rounded-lg bg-brand-soft text-brand"><Gauge size={17} /></span>
+                    </div>
+                    <div className="mt-5 flex flex-wrap items-center gap-5">
+                      <div className="grid h-32 w-32 shrink-0 place-items-center rounded-full" style={{ background: `conic-gradient(var(--brand-primary) ${analytics.overall}%, var(--bg-track) ${analytics.overall}% 100%)` }}>
+                        <div className="grid h-[102px] w-[102px] place-items-center rounded-full bg-surface text-center">
+                          <span>
+                            <strong className="block text-2xl font-semibold">{analytics.overall}%</strong>
+                            <span className="text-[11px] text-muted">Overall</span>
+                          </span>
+                        </div>
+                      </div>
+                      <div className="min-w-[150px] flex-1 space-y-3">
+                        {[
+                          { label: "Completed", value: analytics.completed, color: "bg-success" },
+                          { label: "In progress", value: analytics.inProgress, color: "bg-brand" },
+                          { label: "To do", value: analytics.todo, color: "bg-muted" },
+                          { label: "Overdue", value: analytics.overdue, color: "bg-danger" },
+                        ].map(item => (
+                          <div key={item.label} className="flex items-center gap-2 text-xs">
+                            <span className={`h-2 w-2 rounded-full ${item.color}`} />
+                            <span className="flex-1 text-secondary">{item.label}</span>
+                            <strong className="text-heading">{item.value}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </article>
+                  <article className="rounded-xl border border-line bg-surface p-5">
+                    <div className="mb-4 flex items-center justify-between">
+                      <div>
+                        <h2 className="text-sm font-semibold text-heading">Project progress</h2>
+                        <p className="mt-1 text-xs text-muted">Progress of active projects in this workspace</p>
+                      </div>
+                      <button className="text-xs font-medium text-brand" onClick={onViewProjects}>
+                        View all <ArrowRight size={13} className="ml-1 inline" />
+                      </button>
+                    </div>
+                    <div className="space-y-4">
+                      {analytics.featured.map(row => (
+                        <button key={row.project.id} className="group flex w-full items-center gap-3 text-left" onClick={() => onOpenProject(row.project.id)}>
+                          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand-soft text-brand"><FolderKanban size={15} /></span>
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center justify-between gap-2">
+                              <span className="truncate text-xs font-medium text-heading group-hover:text-brand">{row.project.name}</span>
+                              <span className="text-[11px] text-muted">{row.progress}%</span>
+                            </span>
+                            <span className="mt-1.5 block h-1.5 overflow-hidden rounded-full bg-track">
+                              <span className="block h-full rounded-full bg-brand" style={{ width: `${row.progress}%` }} />
+                            </span>
+                          </span>
+                          <span className="hidden sm:block"><Badge tone={healthTone[row.health]}>{row.health}</Badge></span>
+                        </button>
+                      ))}
+                      {analytics.rows.length === 0 && (
+                        <EmptyState
+                          title="No projects yet"
+                          description={isAdmin ? "Create the first project with New project — you become its Project Manager." : "A workspace Owner or Admin sets up projects."}
+                        />
+                      )}
+                    </div>
+                  </article>
+                </section>
+
+                <section className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,.8fr)]">
+                  <article className="overflow-hidden rounded-xl border border-line bg-surface">
+                    <div className="flex items-center justify-between border-b border-line px-4 py-3">
+                      <div>
+                        <h2 className="text-sm font-semibold text-heading">Active projects</h2>
+                        <p className="mt-1 text-xs text-muted">Teams, progress and upcoming deadlines</p>
+                      </div>
+                      <button className="text-xs font-medium text-brand" onClick={onViewProjects}>
+                        View all <ArrowRight size={13} className="ml-1 inline" />
+                      </button>
+                    </div>
+                    <div className="divide-y divide-line">
+                      {analytics.activeRows.map(row => (
+                        <button
+                          key={row.project.id}
+                          onClick={() => onOpenProject(row.project.id)}
+                          className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 text-left hover:bg-hover sm:grid-cols-[minmax(0,1.1fr)_minmax(90px,.7fr)_minmax(90px,.7fr)_auto]"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-xs font-semibold text-heading">{row.project.name}</span>
+                            <span className="mt-1 block truncate text-[11px] text-muted">{row.project.status}</span>
+                          </span>
+                          <span className="hidden sm:block"><AvatarGroup names={row.members} /></span>
+                          <span className="flex items-center gap-2 text-[11px] text-secondary">
+                            <span className="h-1.5 w-16 overflow-hidden rounded-full bg-track">
+                              <span className="block h-full rounded-full bg-brand" style={{ width: `${row.progress}%` }} />
+                            </span>
+                            {row.progress}%
+                          </span>
+                          <span className="text-[11px] text-muted">{row.nextMilestone ? shortDate(row.nextMilestone.due_date) : "No due date"}</span>
+                        </button>
+                      ))}
+                      {analytics.rows.length === 0 && <EmptyState title="No active projects" description="Projects you can access appear here." />}
+                    </div>
+                  </article>
+                  <article className="overflow-hidden rounded-xl border border-line bg-surface">
+                    <div className="flex items-center justify-between border-b border-line px-4 py-3">
+                      <div>
+                        <h2 className="text-sm font-semibold text-heading">Recent resources</h2>
+                        <p className="mt-1 text-xs text-muted">Recently updated project files</p>
+                      </div>
+                      <FileText size={16} className="text-brand" />
+                    </div>
+                    {analytics.resources.length ? (
+                      <div className="divide-y divide-line">
+                        {analytics.resources.map(resource => (
+                          <div key={resource.id} className="flex items-center gap-3 px-4 py-3">
+                            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand-soft text-brand"><FileText size={14} /></span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-xs font-medium text-heading">{resource.name}</span>
+                              <span className="mt-1 block truncate text-[11px] text-muted">{resource.type} · Updated {shortDate(resource.updated_at)}</span>
+                            </span>
+                            <ArrowUpRight size={13} className="text-muted" />
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <EmptyState title="No shared resources" description="Resources from your workspace projects appear here." />
+                    )}
+                  </article>
+                </section>
+              </div>
+
+              <aside className="space-y-4">
+                <article className="overflow-hidden rounded-xl border border-line bg-surface">
+                  <div className="flex items-center justify-between border-b border-line px-4 py-3">
+                    <div>
+                      <h2 className="text-sm font-semibold text-heading">Recent activity</h2>
+                      <p className="mt-1 text-xs text-muted">Latest work across projects</p>
+                    </div>
+                    <CircleDot size={16} className="text-brand" />
                   </div>
-                </div>
-              </li>
-            ))}
-          </ul>
+                  {activityState === "loading" && <LoadingState label="Loading activity" />}
+                  {activityState === "error" && (
+                    <ErrorState
+                      title="Recent activity could not be loaded"
+                      description="The activity feed is temporarily unavailable."
+                      action={<Button onClick={() => setReloadToken(token => token + 1)}>Retry</Button>}
+                    />
+                  )}
+                  {activityState === "ready" && activities?.length === 0 && (
+                    <EmptyState title="No activity yet" description="Actions taken in this workspace appear here — projects, tasks, meetings, and memberships." />
+                  )}
+                  {activityState === "ready" && activities && activities.length > 0 && (
+                    <div className="divide-y divide-line">
+                      {activities.map(activity => (
+                        <div key={activity.id} className="flex items-start gap-3 px-4 py-3">
+                          <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-xs font-medium text-heading">
+                              {activity.actor_display_name?.trim() || "Someone"} {activityText(activity)}
+                            </span>
+                            <span className="mt-1 block truncate text-[11px] text-muted">
+                              {shortDateTime(activity.created_at)} · {activity.resource_type}
+                              {activity.actor_user_id ? "" : " · System"}
+                            </span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {activityState === "ready" && activities !== null && activities.length < activityTotal && (
+                    <div className="flex justify-center border-t border-line px-4 py-3">
+                      <Button
+                        size="sm"
+                        disabled={activityLoadingMore}
+                        icon={activityLoadingMore ? <Loader2 size={13} className="animate-spin" /> : undefined}
+                        onClick={() => void loadMoreActivity()}
+                      >
+                        {activityLoadingMore ? "Loading…" : `Load more (${activityTotal - activities.length} older)`}
+                      </Button>
+                    </div>
+                  )}
+                  <p className="border-t border-line px-4 py-3 text-[10px] text-muted">
+                    This feed is the workspace's notification surface — every action is recorded here; there is no separate per-person inbox yet.
+                  </p>
+                </article>
+              </aside>
+            </div>
+          </>
         )}
-        {activityState === "ready" && activities !== null && activities.length < activityTotal && (
-          <div className="flex justify-center">
-            <Button size="sm" disabled={activityLoadingMore} icon={activityLoadingMore ? <Loader2 size={13} className="animate-spin" /> : undefined} onClick={() => void loadMoreActivity()}>
-              {activityLoadingMore ? "Loading…" : `Load more (${activityTotal - activities.length} older)`}
-            </Button>
-          </div>
-        )}
-        <p className="text-[10px] text-muted">
-          This feed is the workspace's notification surface — every action is recorded here; there is no separate per-person inbox yet.
-        </p>
-      </section>
-      </>)}
+      </>
+      )}
     </div>
+  );
+}
+
+/** Demo-parity metric tile (WorkspaceOverviewPage's OverviewMetric). */
+function OverviewMetric({ icon, label, value, note, tone }: { icon: ReactNode; label: string; value: number; note: string; tone: "violet" | "blue" | "orange" | "green" }) {
+  const tones = { violet: "bg-brand-soft text-brand", blue: "bg-blue-50 text-blue-600", orange: "bg-warning-soft text-warning", green: "bg-success-soft text-success" } as const;
+  return (
+    <article className="flex items-center gap-3 rounded-xl border border-line bg-surface p-4">
+      <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${tones[tone]}`}>{icon}</span>
+      <div className="min-w-0">
+        <p className="text-[11px] text-muted">{label}</p>
+        <p className="mt-0.5 text-xl font-semibold leading-tight">{value}</p>
+        <p className="mt-1 truncate text-[10px] text-secondary">{note}</p>
+      </div>
+    </article>
+  );
+}
+
+/** People section stat tile (prototype PeoplePage parity). */
+function PeopleStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
+  return (
+    <article className="flex items-center gap-3.5 rounded-xl border border-line bg-surface p-4">
+      <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand">{icon}</span>
+      <div className="min-w-0">
+        <p className="truncate text-xs text-muted">{label}</p>
+        <p className="mt-0.5 text-xl font-semibold leading-tight">{value}</p>
+      </div>
+    </article>
   );
 }
