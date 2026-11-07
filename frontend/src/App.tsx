@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { AuthPanel } from "./components/AuthPanel";
 import { LandingPage } from "./components/LandingPage";
@@ -17,13 +17,15 @@ import { WorkspaceEditor } from "./modules/workspace/components/WorkspaceEditor"
 import { AppShell, type NotificationItem, type Scope } from "./components/AppShell";
 import { Button } from "./components/ui";
 import { ProjectEditor, TaskEditor, MeetingEditor, ResourceEditor, type EditorState } from "./modules/projects/components/ProjectEditors";
-import { createId, isPastMeeting, isRecentlyUpdated, milestoneState, sortMeetingsByDate, sortMilestones, type AppData, type Invitation, type Meeting, type Membership, type Project, type Resource, type Task, type TaskStatus, type Workspace, type WorkspaceRole, useAppData } from "./model";
+import { createId, isPastMeeting, isRecentlyUpdated, milestoneState, sortMeetingsByDate, sortMilestones, type AppData, type Invitation, type Meeting, type Membership, type Person, type Project, type Resource, type Task, type TaskStatus, type Workspace, type WorkspaceRole, useAppData } from "./model";
 import { useAuthActions, useAuthState } from "./lib/auth/AuthContext";
 import { useRealWorkspaces } from "./lib/real/useRealWorkspaces";
 import { RealWorkspaceHome } from "./components/RealWorkspaceHome";
 import { RealProjectsPage } from "./components/RealProjectsPage";
-import { RealProjectDetailPage } from "./components/RealProjectDetailPage";
+import { RealProjectDetailPage, REAL_PROJECT_TABS, type RealProjectTab } from "./components/RealProjectDetailPage";
 import { workspaceApi, type ApiWorkspace } from "./lib/api/workspace";
+import { type ApiProject } from "./lib/api/projects";
+import { useRealProjects } from "./lib/real/useRealProjects";
 import { friendlyError } from "./lib/api/client";
 
 const prototypeWorkspace = (source: ApiWorkspace): Workspace => ({
@@ -32,6 +34,24 @@ const prototypeWorkspace = (source: ApiWorkspace): Workspace => ({
   url: `asquii.com/${source.slug}`,
   visibility: "private",
   notifications: { taskAssignments: true, projectUpdates: true, upcomingDeadlines: true },
+});
+
+/**
+ * Real project → prototype Project shim so the shell (sidebar list,
+ * switcher, palette) renders actual workspace projects. Person/project
+ * details the prototype shape needs but the list endpoint does not carry
+ * stay empty — they are never read from this shim.
+ */
+const prototypeProject = (source: ApiProject): Project => ({
+  id: source.id,
+  workspaceId: source.workspace_id,
+  name: source.name,
+  description: source.description,
+  status: source.status,
+  progress: source.progress_mode === "manual" ? source.manual_progress ?? 0 : 0,
+  progressMode: source.progress_mode,
+  personIds: [],
+  milestones: [],
 });
 
 export default function App() {
@@ -68,15 +88,48 @@ export default function App() {
   });
   const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
   const [realProjectId, setRealProjectId] = useState<string | null>(null);
-  // Real project detail is a transient drill-down: navigating anywhere else or
-  // switching workspace closes it, so returning to Projects shows the list.
+  const [realProjectTab, setRealProjectTab] = useState<RealProjectTab>("overview");
+  const realProjects = useRealProjects(signedIn, realWorkspaces.selected?.id ?? null, authActions.getAccessToken);
+  // A project drill-down (signed-in) lives only inside the Projects section:
+  // leaving it — or switching workspace — returns to the project list. The
+  // ref keeps the first-load deep link (active + project set together) alive.
+  const activeRef = useRef(active);
   useEffect(() => {
-    setRealProjectId(null);
+    const previous = activeRef.current;
+    activeRef.current = active;
+    if (previous !== active && previous === "Projects") setRealProjectId(null);
   }, [active]);
+  const realProjectScope = signedIn && realProjectId !== null && active === "Projects";
+  const realSelectedProject = realProjectScope && realProjectId !== null
+    ? realProjects.projects.find(project => project.id === realProjectId) ?? null
+    : null;
   const realWorkspaceSelectedId = realWorkspaces.selected?.id;
   useEffect(() => {
     setRealProjectId(null);
   }, [realWorkspaceSelectedId]);
+
+  // Deep links: `#project/{projectId}/{tab}` — signed-in only, kept apart
+  // from the demo's #demo hash. Applied on first load and on Back/Forward.
+  useEffect(() => {
+    if (!signedIn) return;
+    const applyFromHash = () => {
+      const match = window.location.hash.match(/^#project\/([0-9a-fA-F-]+)(?:\/([a-z]+))?$/);
+      if (match) {
+        const tab = REAL_PROJECT_TABS.includes(match[2] as RealProjectTab) ? match[2] as RealProjectTab : "overview";
+        // Mark the lifetime ref before `active` settles so the leave-effect
+        // does not swallow the deep link we are currently restoring.
+        activeRef.current = "Projects";
+        setRealProjectId(match[1]);
+        setRealProjectTab(tab);
+        setActive("Projects");
+      } else {
+        setRealProjectId(null);
+      }
+    };
+    applyFromHash();
+    window.addEventListener("popstate", applyFromHash);
+    return () => window.removeEventListener("popstate", applyFromHash);
+  }, [signedIn]);
   const [theme, setTheme] = useState<"light" | "dark">(readTheme);
 
   const membership = data.memberships.find(item => item.workspaceId === workspaceId && item.personId === personaId);
@@ -101,9 +154,15 @@ export default function App() {
   const displayWorkspace = signedIn ? (realWorkspaces.selected ? prototypeWorkspace(realWorkspaces.selected) : emptyWorkspace) : workspace;
   const displayWorkspaces = signedIn ? realWorkspaces.workspaces.map(prototypeWorkspace) : visibleWorkspaces;
   const displayRole: WorkspaceRole = signedIn ? (realWorkspaces.selected?.role === "Member" ? "Member" : realWorkspaces.selected ? "Admin" : "Member") : role;
-  const displayCanAdmin = signedIn ? displayRole === "Admin" : canAdmin;
-  const displayProjects = signedIn ? [] as Project[] : visibleProjects;
-  const displaySelectedProject = signedIn ? undefined : selectedProject;
+  // Shell "admin" also covers project managers while inside their project:
+  // the backend lets them manage settings, so the shell shows those entries.
+  const displayCanAdmin = signedIn
+    ? displayRole === "Admin" || (realProjectScope && realSelectedProject?.current_user_role === "Project Manager")
+    : canAdmin;
+  const displayProjects = signedIn ? realProjects.projects.map(prototypeProject) : visibleProjects;
+  const displaySelectedProject = signedIn
+    ? (realSelectedProject ? prototypeProject(realSelectedProject) : undefined)
+    : selectedProject;
 
   const notifications = useMemo<NotificationItem[]>(() => {
     if (signedIn) return []; // Prototype-derived notifications stay in demo mode; real ones arrive with later slices.
@@ -178,15 +237,69 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, [signedIn]);
 
+  /** Clear the deep-link hash while keeping the browser Back entry. */
+  const closeRealProject = () => {
+    setRealProjectId(null);
+    if (window.location.hash.startsWith("#project/")) {
+      window.history.pushState({ asquiiView: "app" }, "", window.location.pathname + window.location.search);
+    }
+  };
+  /** Drill into a workspace project (shell deep-link URL included). */
+  const openRealProject = (id: string, tab: RealProjectTab = "overview") => {
+    setRealProjectId(id);
+    setRealProjectTab(tab);
+    setScope("project");
+    setActive("Projects");
+    rememberProject(id);
+    window.history.pushState({ asquiiView: "app" }, "", `#project/${id}/${tab}`);
+  };
+  /** Controlled-tab change from the shell; mirrored into the URL hash. */
+  const changeRealProjectTab = (tab: RealProjectTab) => {
+    setRealProjectTab(tab);
+    if (realProjectId) {
+      window.history.replaceState(window.history.state, "", `#project/${realProjectId}/${tab}`);
+    }
+  };
   const navigate = (item: string) => {
-    if (item === "Workspace overview") { setScope("workspace"); setActive("Overview"); return; }
-    if (item === "Projects") { setScope("workspace"); setActive("Projects"); return; }
+    if (signedIn && realProjectScope) {
+      // Project-tab clicks (sidebar, palette, breadcrumb) stay inside the
+      // drill-down instead of hitting workspace pages that do not exist here.
+      const key = item.toLowerCase() as RealProjectTab;
+      if (REAL_PROJECT_TABS.includes(key)) {
+        changeRealProjectTab(key);
+        return;
+      }
+    }
+    if (item === "Workspace overview") {
+      if (signedIn && realProjectId !== null) closeRealProject();
+      setScope("workspace");
+      setActive("Overview");
+      return;
+    }
+    if (item === "Projects") {
+      if (signedIn && realProjectId !== null) closeRealProject();
+      setScope("workspace");
+      setActive("Projects");
+      return;
+    }
     setActive(item);
   };
   const selectWorkspace = (id: string) => { setWorkspaceId(id); setScope("workspace"); setActive("Overview"); setProjectId(""); };
   const rememberProject = (id: string) => { if (!id) return; setRecentIds(previous => [id, ...previous.filter(value => value !== id)].slice(0, 6)); };
-  const selectProject = (id: string) => { setProjectId(id); setScope("project"); setActive("Overview"); rememberProject(id); };
-  const openProjectPage = (id: string, page: string) => { setProjectId(id); setScope("project"); setActive(page); rememberProject(id); };
+  const selectProject = (id: string) => {
+    // Signed-in: every project entry point (sidebar switcher, palette,
+    // recents) opens the real project detail.
+    if (signedIn) { openRealProject(id, "overview"); return; }
+    setProjectId(id); setScope("project"); setActive("Overview"); rememberProject(id);
+  };
+  const openProjectPage = (id: string, page: string) => {
+    if (signedIn) {
+      const key = page.toLowerCase() as RealProjectTab;
+      openRealProject(id, REAL_PROJECT_TABS.includes(key) ? key : "overview");
+      return;
+    }
+    setProjectId(id); setScope("project"); setActive(page); rememberProject(id);
+  };
   const markNotificationRead = (id: string) => setReadIds(previous => previous.includes(id) ? previous : [...previous, id]);
   const markAllNotificationsRead = () => setReadIds(previous => { const all = new Set(previous); for (const item of notifications) all.add(item.id); return [...all]; });
   const openCreateProject = () => { if (canAdmin && workspace) setEditor({ kind: "project" }); };
@@ -321,6 +434,8 @@ export default function App() {
     // Anonymous home is the landing again; the demo stays opt-in per session.
     setDemoMode(false);
     setActive("Overview");
+    // A stale #project/... hash would re-open the drill-down on next sign-in.
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
   };
   const showLanding = !signedIn && !demoMode && active === "Overview";
   const openSignIn = () => { setAuthMode("sign-in"); setAuthOpen(true); };
@@ -360,7 +475,7 @@ export default function App() {
         />
       </div>
     ) : (
-    <AppShell scope={signedIn ? "workspace" : scope} active={signedIn && !["Projects", "People", "Settings"].includes(active) ? "Overview" : active} onNavigate={navigate} workspace={displayWorkspace} workspaces={displayWorkspaces} projects={displayProjects} project={displaySelectedProject} tasks={workspaceTasks} people={data.people} personaId={personaId} role={displayRole} canAdmin={displayCanAdmin} notifications={notifications} onSelectWorkspace={selectWorkspace} onSelectProject={selectProject} onSelectPersona={setPersonaId} onCreateWorkspace={() => setWorkspaceEditorOpen(true)} onOpenProjectPage={openProjectPage} onReadNotification={markNotificationRead} onMarkAllNotificationsRead={markAllNotificationsRead} recentProjectIds={recentIds} onCreateProject={!signedIn && displayCanAdmin ? openCreateProject : undefined} onCreateTask={!signedIn && selectedProject ? () => openCreateTask() : undefined} onCreateMeeting={!signedIn && selectedProject ? openCreateMeeting : undefined} onCreateResource={!signedIn && selectedProject ? openCreateResource : undefined} onQuickCreate={!signedIn ? openQuickCreate : undefined} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} account={account} onShowSignIn={openSignIn} onSignOut={() => void handleSignOut()} onBackToLanding={!signedIn && demoMode ? exitDemo : undefined}>
+    <AppShell scope={realProjectScope ? "project" : signedIn ? "workspace" : scope} active={realProjectScope ? realProjectTab.charAt(0).toUpperCase() + realProjectTab.slice(1) : signedIn && !["Projects", "People", "Settings"].includes(active) ? "Overview" : active} projectNav={realProjectScope} onNavigate={navigate} workspace={displayWorkspace} workspaces={displayWorkspaces} projects={displayProjects} project={displaySelectedProject} tasks={signedIn ? [] as Task[] : workspaceTasks} people={signedIn ? [] as Person[] : data.people} personaId={personaId} role={displayRole} canAdmin={displayCanAdmin} notifications={notifications} onSelectWorkspace={selectWorkspace} onSelectProject={selectProject} onSelectPersona={setPersonaId} onCreateWorkspace={() => setWorkspaceEditorOpen(true)} onOpenProjectPage={openProjectPage} onReadNotification={markNotificationRead} onMarkAllNotificationsRead={markAllNotificationsRead} recentProjectIds={recentIds} onCreateProject={!signedIn && displayCanAdmin ? openCreateProject : undefined} onCreateTask={!signedIn && selectedProject ? () => openCreateTask() : undefined} onCreateMeeting={!signedIn && selectedProject ? openCreateMeeting : undefined} onCreateResource={!signedIn && selectedProject ? openCreateResource : undefined} onQuickCreate={!signedIn ? openQuickCreate : undefined} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} account={account} onShowSignIn={openSignIn} onSignOut={() => void handleSignOut()} onBackToLanding={!signedIn && demoMode ? exitDemo : undefined}>
     {storageError && <div role="alert" className="ui-error-banner mb-5"><span className="flex-1">{storageError}</span><button className="icon-button -my-1 text-danger" aria-label="Dismiss message" onClick={clearStorageError}><X size={15} /></button></div>}
     {auth.status === "error" && (
       <div role="alert" className="ui-error-banner mb-5 !items-center">
@@ -372,9 +487,9 @@ export default function App() {
         {workspaceNotice && <div role="status" className={`mb-5 rounded-xl border border-line px-4 py-3 text-xs font-medium ${workspaceNotice.tone === "success" ? "bg-brand-soft text-brand" : "bg-danger-soft text-danger"}`}>{workspaceNotice.text}</div>}
         {active === "Projects"
           ? (realProjectId
-            ? <RealProjectDetailPage workspaceState={realWorkspaces} projectId={realProjectId} getAccessToken={authActions.getAccessToken} identityUserId={identityUserId} onBack={() => setRealProjectId(null)} />
-            : <RealProjectsPage workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} onOpenProject={setRealProjectId} />)
-          : <RealWorkspaceHome workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} identityUserId={identityUserId} section={active === "People" ? "people" : active === "Settings" ? "settings" : "home"} onOpenProject={id => { setRealProjectId(id); navigate("Projects"); }} onViewProjects={() => navigate("Projects")} onViewPeople={() => navigate("People")} />}
+            ? <RealProjectDetailPage workspaceState={realWorkspaces} projectId={realProjectId} getAccessToken={authActions.getAccessToken} identityUserId={identityUserId} activeTab={realProjectTab} onTabChange={changeRealProjectTab} />
+            : <RealProjectsPage workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} onOpenProject={id => openRealProject(id)} />)
+          : <RealWorkspaceHome workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} identityUserId={identityUserId} section={active === "People" ? "people" : active === "Settings" ? "settings" : "home"} onOpenProject={id => openRealProject(id)} onViewProjects={() => navigate("Projects")} onViewPeople={() => navigate("People")} />}
       </>
       : <>
         {!isPeoplePage && active !== "Overview" && !(scope === "project" && active === "Settings") && !(scope === "workspace" && active === "Projects") && <div className="mb-5 flex flex-wrap items-end justify-between gap-3 sm:mb-6"><div><h1 className="mobile-page-title text-2xl font-semibold tracking-tight">{pageTitle}</h1><p className="mt-1.5 text-sm text-muted">{description(scope, active, role)}</p></div>{action && <Button variant="primary" icon={<Plus size={15} />} onClick={scope === "workspace" ? openCreateProject : () => openCreateTask()}>{action}</Button>}</div>}

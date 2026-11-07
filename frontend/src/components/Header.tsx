@@ -25,7 +25,10 @@ export function Header({ scope, active, workspace, workspaces, projects, project
     <header className="fixed inset-x-0 top-0 z-40 flex h-14 items-center justify-between border-b border-line bg-surface px-3 sm:px-4 md:px-5">
       <div className="flex min-w-0 items-center gap-3">
         <button className="icon-button md:hidden" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><Menu size={19} /></button>
-        <div className="flex items-center gap-2"><div className="grid h-7 w-7 place-items-center rounded-lg bg-brand text-sm font-semibold text-white">A</div><span className="text-[17px] font-semibold tracking-tight">Asquii</span></div>
+        <button className="flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-hover" aria-label="Go to workspace overview" title="Workspace overview" onClick={() => navigate("Workspace overview")}>
+          <div className="grid h-7 w-7 place-items-center rounded-lg bg-brand text-sm font-semibold text-white">A</div>
+          <span className="text-[17px] font-semibold tracking-tight">Asquii</span>
+        </button>
         {onBackToLanding && <span className="hidden rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-semibold text-brand sm:inline">Demo</span>}
         <span className="hidden h-6 w-px bg-line sm:block" />
         <button className="hidden max-w-[280px] items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-hover sm:flex" aria-expanded={switcherOpen} onClick={() => setSwitcherOpen(value => !value)}>
@@ -65,7 +68,7 @@ export function Header({ scope, active, workspace, workspaces, projects, project
               <div className="border-b border-line px-3 pb-2 pt-1">
                 <p className="truncate text-xs font-semibold">{account.name}</p>
                 {account.email && <p className="mt-0.5 truncate text-[10px] text-muted">{account.email}</p>}
-                <p className="mt-1 text-[10px] text-muted">Signed in · project lists still show sample data until integration is complete</p>
+                <p className="mt-1 text-[10px] text-muted">Signed in · workspace data is live from the API</p>
               </div>
               <button className="menu-row flex w-full items-center gap-2.5 text-danger" onClick={() => { setPersonaOpen(false); onSignOut(); }}>Sign out</button>
             </div>}
