@@ -590,9 +590,9 @@ Fill the counts at the end of the run.
 
 | # | Action | Expected result |
 |---|---|---|
-| 1 | Open the app (Overview). | Workspace card shows the briefcase tile, workspace name "Smoke Workspace 1793806974", and `asquii.com/<slug>`. |
-| 2 | Check the badges. | The current role badge reads **Owner**. |
-| 3 | Check the invitations badge. | "No pending invitations" or "N pending invitation(s)" consistent with the invitation list. |
+| 1 | Open the app (Overview). | Overview header shows the workspace initials tile, workspace name "Smoke Workspace 1793806974", the **Owner** role badge, and `asquii.com/<slug>`. |
+| 2 | Check the header actions. | A member avatar stack, **Invite people** (goes to People), and — as Owner/Admin — **New project** are present. |
+| 3 | Check the metric cards. | Four cards: Projects, People, Teams, Tasks with counts and the note lines. |
 
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
 **Notes:**
@@ -603,21 +603,24 @@ Fill the counts at the end of the run.
 
 | # | Action | Expected result |
 |---|---|---|
-| 1 | Scroll the home. | Sections appear in order: Workspace settings, People, Invitations, Projects, Recent activity. |
-| 2 | Confirm the activity note. | The footer of the feed states it is the workspace notification surface and that there is no per-person inbox yet. |
+| 1 | Scroll the home. | Sections appear in order: inline project form (after clicking **New project**), metric cards, Workspace progress + Project progress, Active projects + Recent resources, and the Recent activity aside card. |
+| 2 | Confirm the activity note. | The footer of the feed states it is the workspace notification surface and that there is no separate per-person inbox yet. |
+| 3 | Check People/Invitations/Settings. | They no longer render on the home; People + Invitations live on the **People** page and workspace rename/archive on **Settings**. |
 
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
 **Notes:**
 
-### TC-HOME-03 — Projects list
+### TC-HOME-03 — Dashboard project panels
 
 **Priority:** High
 
 | # | Action | Expected result |
 |---|---|---|
-| 1 | Inspect the Projects section heading. | Shows "Projects (N)" with N matching the list. |
-| 2 | Inspect "Integration Test Project". | Status badge, progress, and milestone summary render; the row offers an **Open** button. |
-| 3 | Confirm empty state handling. | With zero projects, "No projects yet" appears instead of a blank area. |
+| 1 | Inspect Workspace progress. | A conic-gradient donut with the average percent and a legend for Completed / In progress / To do / Overdue. |
+| 2 | Inspect Project progress. | Up to 5 projects with a progress bar, percent, and a health badge (**On track**, **Needs attention** for In-review tasks, **At risk** when a task is overdue). **View all** switches to Projects. |
+| 3 | Inspect Active projects. | Up to 5 rows with status, member avatars, progress, and the next milestone due date ("No due date" when none). |
+| 4 | Inspect Recent resources. | Up to 4 recently updated resources with type; empty state when none. |
+| 5 | Confirm empty state handling. | With zero projects, "No projects yet" / "No active projects" replace the panels. |
 
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
 **Notes:**
@@ -628,9 +631,10 @@ Fill the counts at the end of the run.
 
 | # | Action | Expected result |
 |---|---|---|
-| 1 | As Owner, inspect the Projects header. | **New project** button is present. |
+| 1 | As Owner, inspect the overview header. | **New project** button is present in the header. |
 | 2 | Sign in as the invited Member. | The button is absent. |
 | 3 | As Member, attempt `POST /api/v1/workspaces/{wid}/projects` with a valid token (optional, Swagger). | Backend returns 403 (authorization stays server-side). |
+| 4 | As Member, sign in and open the Overview. | The People page shows People but no invitation create form; GET /invitations is not called (no error notice). |
 
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
 **Notes:**
@@ -641,9 +645,9 @@ Fill the counts at the end of the run.
 
 | # | Action | Expected result |
 |---|---|---|
-| 1 | Click **New project**. | Inline form appears with Name, Description, Status, Progress mode. |
-| 2 | Enter a unique name, a short description, status **Active**, progress **Automatic (from tasks)**. | — |
-| 3 | Click **Create project**. | The form closes; the new project appears in the list; a success notice appears. |
+| 1 | Click **New project** in the overview header. | The inline form appears above the metric cards with Name, Description, Status, Progress mode. |
+| 2 | Enter a unique name, a short description, status **In progress**, progress **Automatic (from tasks)**. | — |
+| 3 | Click **Create project**. | The form closes; the Projects metric count grows, the project appears in Project progress / Active projects; a success notice appears. |
 | 4 | Open the project and check Members. | The creator is the **Project Manager**. |
 
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
@@ -656,19 +660,19 @@ Fill the counts at the end of the run.
 | # | Action | Expected result |
 |---|---|---|
 | 1 | Click **New project**, choose progress **Manual**. | A "Manual progress (%)" input appears. |
-| 2 | Set 40% and submit with a unique name. | The project is created and shows 40% progress in the list. |
+| 2 | Set 40% and submit with a unique name. | The project is created and shows 40% progress on the dashboard panels. |
 | 3 | Set the input to 150 (if possible via keyboard). | The value clamps to 100 (or the field refuses the value) and the payload never exceeds 100. |
 
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
 **Notes:**
 
-### TC-HOME-07 — Open a project from the home
+### TC-HOME-07 — Open a project from the dashboard
 
 **Priority:** High
 
 | # | Action | Expected result |
 |---|---|---|
-| 1 | Click **Open** on "Integration Test Project". | The real project detail page opens. |
+| 1 | Click a project row in Project progress or Active projects. | The real project detail page opens. |
 | 2 | Use the back button in the project header. | Returns to the project list. |
 
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
@@ -680,9 +684,8 @@ Fill the counts at the end of the run.
 
 | # | Action | Expected result |
 |---|---|---|
-| 1 | Scroll to **Recent activity**. | The newest events are listed (8 by default) with actor, action text, timestamp, and resource-type badge. |
-| 2 | Inspect the header badge. | Shows "Newest 8 of N" when more events exist. |
-| 3 | Compare with a known recent action. | An action you just performed (e.g. project created) appears at/near the top. |
+| 1 | Scroll to **Recent activity** in the aside card. | The newest events (8 by default) listed with actor, action text, timestamp, and resource type. |
+| 2 | Compare with a known recent action. | An action you just performed (e.g. project created) appears at/near the top. |
 
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
 **Notes:**
@@ -693,23 +696,25 @@ Fill the counts at the end of the run.
 
 | # | Action | Expected result |
 |---|---|---|
-| 1 | Click **Load more (N older)**. | The list grows by another page (8 → 16); the button label counts down. |
-| 2 | Repeat until fewer than one page remains. | The button disappears when all events are loaded. |
-| 3 | Confirm no duplicates. | No event appears twice across pages. |
+| 1 | Scroll the activity aside card. | A page has at most 8 rows; the **Load more (N older)** button shows the remaining count. |
+| 2 | Click **Load more (N older)**. | The list grows by another page (8 → 16); the button label counts down. |
+| 3 | Repeat until fewer than one page remains. | The button disappears when all events are loaded. |
+| 4 | Confirm no duplicates. | No event appears twice across pages. |
 
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
 **Notes:**
 
-### TC-HOME-10 — Rename the workspace from the home
+### TC-HOME-10 — Rename the workspace (Settings page)
 
 **Priority:** Medium · **Preconditions:** Owner or Admin
 
 | # | Action | Expected result |
 |---|---|---|
-| 1 | In **Workspace settings**, change the name and click **Save name**. | The card heading and sidebar workspace name update; a success notice appears. |
-| 2 | Reload. | The new name persists. |
-| 3 | Inspect the slug line. | The slug is unchanged (`asquii.com/<old-slug>`), per the stable-slug rule. |
-| 4 | Restore the original name. | Saves successfully. |
+| 1 | Open **Settings** from the sidebar. | Workspace settings (rename for Owner/Admin, archive for Owner) has its own page and no longer renders on the overview. |
+| 2 | Change the name and click **Save name**. | The overview header and sidebar workspace name update; a success notice appears. |
+| 3 | Reload. | The new name persists. |
+| 4 | Inspect the slug line. | The slug is unchanged (`asquii.com/<old-slug>`), per the stable-slug rule. |
+| 5 | Restore the original name. | Saves successfully. |
 
 **Result:** [ ] Pass  [ ] Fail  [ ] Blocked
 **Notes:**
