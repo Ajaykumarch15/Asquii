@@ -16,7 +16,7 @@ export function WorkspaceOverviewPage({ data, workspace, role, personaId, onOpen
   const overall = data.projects.length ? Math.round(data.projects.reduce((sum, project) => sum + projectProgress(project, tasks), 0) / data.projects.length) : 0;
   const teams = [...new Set(data.people.map(person => teamFor(person.role)))];
   const activity = [
-    ...tasks.slice(0, 3).map(task => ({ title: task.title, detail: `${data.people.find(person => person.id === task.ownerId)?.name ?? "A teammate"} · ${data.projects.find(project => project.id === task.projectId)?.name ?? "Project"}`, time: task.status === "Complete" ? "Completed" : task.status })),
+    ...tasks.slice(0, 3).map(task => ({ title: task.title, detail: `${task.ownerIds.map(id => data.people.find(person => person.id === id)?.name ?? "").filter(Boolean).join(", ") || "A teammate"} · ${data.projects.find(project => project.id === task.projectId)?.name ?? "Project"}`, time: task.status === "Complete" ? "Completed" : task.status })),
     ...resources.slice(0, 2).map(resource => ({ title: resource.name, detail: `Shared in ${data.projects.find(project => project.id === resource.projectId)?.name ?? "Project"}`, time: shortDate(resource.updatedAt) }))
   ].slice(0, 5);
   const workspacesInitials = workspace.name.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase();

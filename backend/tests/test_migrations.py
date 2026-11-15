@@ -14,15 +14,17 @@ def test_schema_revision_follows_preserved_empty_baseline():
     config.set_main_option("script_location", str(backend_root / "alembic"))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "0005_rls_lock_read_relaxations"
+    assert script.get_current_head() == "0006_task_multi_assignees"
     revision = script.get_revision("0002_mvp_schema")
     correction = script.get_revision("0003_lifecycle_hardening")
     hardening = script.get_revision("0004_enable_rls_and_policies")
     relaxations = script.get_revision("0005_rls_lock_read_relaxations")
+    assignees = script.get_revision("0006_task_multi_assignees")
     assert revision.down_revision == "0001_empty_baseline"
     assert correction.down_revision == "0002_mvp_schema"
     assert hardening.down_revision == "0003_lifecycle_hardening"
     assert relaxations.down_revision == "0004_enable_rls_and_policies"
+    assert assignees.down_revision == "0005_rls_lock_read_relaxations"
     assert script.get_revision("0001_empty_baseline") is not None
 
     relaxations_source = (

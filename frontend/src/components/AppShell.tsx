@@ -28,6 +28,10 @@ type Props = {
   projectNav?: boolean;
   /** Real session account; null means unauthenticated prototype demo mode. */
   account?: { name: string; email: string | null } | null;
+  /** Opens the signed-in profile page from the account menu. */
+  onOpenProfile: () => void;
+  /** Opens the signed-in account settings page from the account menu. */
+  onOpenAccountSettings: () => void;
   onShowSignIn: () => void; onSignOut: () => void;
   /** Set only while an anonymous visitor is inside the prototype demo. */
   onBackToLanding?: () => void;
@@ -41,7 +45,7 @@ type PaletteResult = { key: string; type: "Project" | "Task" | "Person" | "Actio
 
 const paletteIcon = (result: PaletteResult) => result.icon ?? (result.type === "Project" ? <FolderKanban size={14} /> : result.type === "Task" ? <ListTodo size={14} /> : result.type === "Person" ? <UserRound size={14} /> : <CornerDownLeft size={14} />);
 
-export function AppShell({ scope, active, onNavigate, workspace, workspaces, projects, project, tasks, people, personaId, role, canAdmin, notifications, onSelectWorkspace, onSelectProject, onSelectPersona, onCreateWorkspace, onOpenProjectPage, onReadNotification, onMarkAllNotificationsRead, recentProjectIds, onCreateProject, onCreateTask, onCreateMeeting, onCreateResource, onQuickCreate, theme, onToggleTheme, account, onShowSignIn, onSignOut, onBackToLanding, projectNav, children }: Props) {
+export function AppShell({ scope, active, onNavigate, workspace, workspaces, projects, project, tasks, people, personaId, role, canAdmin, notifications, onSelectWorkspace, onSelectProject, onSelectPersona, onCreateWorkspace, onOpenProjectPage, onReadNotification, onMarkAllNotificationsRead, recentProjectIds, onCreateProject, onCreateTask, onCreateMeeting, onCreateResource, onQuickCreate, theme, onToggleTheme, account, onOpenProfile, onOpenAccountSettings, onShowSignIn, onSignOut, onBackToLanding, projectNav, children }: Props) {
   const unreadCount = notifications.filter(item => !item.read).length;
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -77,6 +81,8 @@ export function AppShell({ scope, active, onNavigate, workspace, workspaces, pro
       addPage("Go to projects", "All workspace projects", () => navigate("Projects"), <FolderKanban size={14} />);
       addPage("Go to people", "Workspace directory and roles", () => navigate("People"), <Users size={14} />);
       if (canAdmin) addPage("Go to settings", "Workspace settings and preferences", () => navigate("Settings"), <Settings2 size={14} />);
+      if (account) addPage("Go to profile", "Your name, job title, and account email", () => navigate("Profile"), <UserRound size={14} />);
+      if (account) addPage("Go to account settings", "Appearance, notifications, and security", () => navigate("Account settings"), <Settings2 size={14} />);
     } else {
       addPage("Go to project overview", project?.name ?? "Project", () => navigate("Overview"), <LayoutDashboard size={14} />);
       addPage("Go to kanban", "Project board", () => navigate("Kanban"), <Activity size={14} />);
@@ -123,7 +129,7 @@ export function AppShell({ scope, active, onNavigate, workspace, workspaces, pro
   };
 
   return <div className="min-h-screen bg-page text-heading">
-    <Header scope={scope} active={active} workspace={workspace} workspaces={workspaces} projects={projects} project={project} setMobileOpen={setMobileOpen} switcherOpen={switcherOpen} setSwitcherOpen={setSwitcherOpen} setPaletteOpen={setPaletteOpen} unreadCount={unreadCount} bellOpen={bellOpen} setBellOpen={setBellOpen} notifications={notifications} onMarkAllNotificationsRead={onMarkAllNotificationsRead} onReadNotification={onReadNotification} navigate={navigate} onOpenProjectPage={onOpenProjectPage} theme={theme} onToggleTheme={onToggleTheme} onQuickCreate={onQuickCreate} currentPerson={currentPerson} personaOpen={personaOpen} setPersonaOpen={setPersonaOpen} people={people} role={role} personaId={personaId} onSelectPersona={onSelectPersona} chooseWorkspace={chooseWorkspace} chooseProject={chooseProject} onCreateWorkspace={onCreateWorkspace} account={account} onShowSignIn={onShowSignIn} onSignOut={onSignOut} onBackToLanding={onBackToLanding} />
+    <Header scope={scope} active={active} workspace={workspace} workspaces={workspaces} projects={projects} project={project} setMobileOpen={setMobileOpen} switcherOpen={switcherOpen} setSwitcherOpen={setSwitcherOpen} setPaletteOpen={setPaletteOpen} unreadCount={unreadCount} bellOpen={bellOpen} setBellOpen={setBellOpen} notifications={notifications} onMarkAllNotificationsRead={onMarkAllNotificationsRead} onReadNotification={onReadNotification} navigate={navigate} onOpenProjectPage={onOpenProjectPage} theme={theme} onToggleTheme={onToggleTheme} onQuickCreate={onQuickCreate} currentPerson={currentPerson} personaOpen={personaOpen} setPersonaOpen={setPersonaOpen} people={people} role={role} personaId={personaId} onSelectPersona={onSelectPersona} chooseWorkspace={chooseWorkspace} chooseProject={chooseProject} onCreateWorkspace={onCreateWorkspace} account={account} onOpenProfile={onOpenProfile} onOpenAccountSettings={onOpenAccountSettings} onShowSignIn={onShowSignIn} onSignOut={onSignOut} onBackToLanding={onBackToLanding} />
     {mobileOpen && <button className="fixed inset-0 z-40 bg-overlay md:hidden" aria-label="Close navigation overlay" onClick={() => setMobileOpen(false)} />}
     <Sidebar scope={scope} active={active} workspace={workspace} workspaces={workspaces} projects={projects} project={project} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} collapsed={collapsed} setCollapsed={setCollapsed} canAdmin={canAdmin} projectNav={projectNav} onNavigate={onNavigate} onSelectWorkspace={onSelectWorkspace} onSelectProject={onSelectProject} onCreateWorkspace={onCreateWorkspace} />
     <main className={`min-h-screen pt-14 transition-[padding] duration-200 ${collapsed ? "md:pl-14" : "md:pl-[220px]"}`}><div className="mobile-content mx-auto max-w-[1600px] p-5 md:p-8">

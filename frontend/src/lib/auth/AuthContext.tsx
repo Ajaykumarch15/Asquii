@@ -7,7 +7,7 @@
  * message and a retry path.
  */
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { apiFetch, friendlyError } from "../api/client";
 import { getSupabaseClient } from "./client";
@@ -33,13 +33,26 @@ type AuthActions = {
   signIn: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   signUp: (email: string, password: string) => Promise<{ ok: boolean; error?: string; needsConfirmation?: boolean }>;
   signOut: () => Promise<void>;
+  /** Update the signed-in account password through Supabase Auth. */
+  changePassword: (password: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Request an email change; Supabase Auth sends the confirmation link. */
+  changeEmail: (email: string) => Promise<{ ok: boolean; error?: string }>;
   /** Current Supabase access token, refreshed by the SDK; null in demo mode. */
   getAccessToken: () => Promise<string | null>;
+  /** Replace the cached identity after a self-service profile update. */
+  applyIdentity: (identity: AuthIdentity) => void;
   retry: () => void;
 };
 
 const AuthStateContext = createContext<AuthState>({ status: "loading" });
 const AuthActionsContext = createContext<AuthActions | null>(null);
+
+/**
+ * How long to wait for the SDK to restore a persisted session before treating
+ * the visitor as signed out. Without this, a stuck session refresh leaves the
+ * UI in `loading` indefinitely, which also disables the sign-in button.
+ */
+const SESSION_RESTORE_TIMEOUT_MS = 12_000;
 
 export function useAuthState(): AuthState {
   return useContext(AuthStateContext);
@@ -68,57 +81,86 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
   // Prevents restoring stale state from an async me-response after a sign-out.
   const [epoch, setEpoch] = useState(0);
+  // Async callers capture values when they start; read the live generation from
+  // a ref so a response that began before sign-out cannot write "authed" after.
+  const sessionGeneration = useRef(0);
+  const bumpEpoch = useCallback(() => {
+    sessionGeneration.current += 1;
+    setEpoch(previous => previous + 1);
+  }, []);
 
   const applySession = useCallback(
     async (session: Session | null) => {
-      // Every caller captures its own epoch; superseded calls never write.
-      const myEpoch = epoch;
+      // Every caller captures its own generation; superseded calls never write.
+      const myGeneration = sessionGeneration.current;
       if (!session || !client) {
+        if (sessionGeneration.current !== myGeneration) return;
         setState(previous => (previous.status === "unconfigured" || previous.status === "authed" ? previous : { status: "demo" }));
         return;
       }
       setState(previous => (previous.status === "authed" ? previous : { status: "loading" }));
       try {
         const identity = await fetchIdentity(session.access_token);
-        if (epoch !== myEpoch) return;
+        if (sessionGeneration.current !== myGeneration) return;
         setState({ status: "authed", identity });
       } catch (error) {
-        if (epoch !== myEpoch) return;
+        if (sessionGeneration.current !== myGeneration) return;
         const friendly = friendlyError(error, "Could not load your account");
-        setState({ status: "error", message: `${friendly.title}: ${friendly.message}` });
+        // A late failure from a superseded restore must not sign out a user who
+        // has since authenticated successfully.
+        setState(previous => (previous.status === "authed" ? previous : { status: "error", message: `${friendly.title}: ${friendly.message}` }));
       }
     },
-    [client, epoch],
+    [client],
   );
 
   useEffect(() => {
     if (!client) return;
 
     let disposed = false;
-    void client.auth.getSession().then(({ data }) => {
-      if (!disposed) void applySession(data.session);
-    });
+    // Safety net: if the SDK's session restore never settles, do not leave the
+    // app permanently in "loading" (landing page + disabled sign-in). Fall back
+    // to the signed-out state; a late session result can still promote us.
+    const restoreWatchdog = window.setTimeout(() => {
+      if (disposed) return;
+      setState(previous => (previous.status === "loading" ? { status: "demo" } : previous));
+    }, SESSION_RESTORE_TIMEOUT_MS);
+    const settleRestore = () => window.clearTimeout(restoreWatchdog);
+
+    void client.auth
+      .getSession()
+      .then(({ data }) => {
+        settleRestore();
+        if (!disposed) void applySession(data.session);
+      })
+      .catch(() => {
+        settleRestore();
+        if (!disposed) setState(previous => (previous.status === "loading" ? { status: "demo" } : previous));
+      });
 
     const {
       data: { subscription },
     } = client.auth.onAuthStateChange((event, session) => {
       if (disposed) return;
       if (event === "SIGNED_OUT") {
-        setEpoch(previous => previous + 1);
+        settleRestore();
+        bumpEpoch();
         setState({ status: "demo" });
         return;
       }
-      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
+      if (event === "INITIAL_SESSION" || event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
+        settleRestore();
         void applySession(session);
       }
     });
 
     return () => {
       disposed = true;
+      settleRestore();
       subscription.unsubscribe();
     };
     // Re-run when the epoch changes so SIGNED_OUT cannot leave ghost sessions.
-  }, [client, epoch, applySession]);
+  }, [client, epoch, applySession, bumpEpoch]);
 
   const actions = useMemo<AuthActions>(() => {
     if (!client) {
@@ -126,7 +168,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signIn: async () => ({ ok: false, error: "Sign-in is not configured in this build." }),
         signUp: async () => ({ ok: false, error: "Sign-up is not configured in this build." }),
         signOut: async () => undefined,
+        changePassword: async () => ({ ok: false, error: "Account security is not configured in this build." }),
+        changeEmail: async () => ({ ok: false, error: "Account security is not configured in this build." }),
         getAccessToken: async () => null,
+        applyIdentity: () => undefined,
         retry: () => undefined,
       };
     }
@@ -152,17 +197,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOut: async () => {
         await client.auth.signOut();
       },
+      changePassword: async (password: string) => {
+        try {
+          const { error } = await client.auth.updateUser({ password });
+          return error ? { ok: false, error: error.message } : { ok: true };
+        } catch (error) {
+          return { ok: false, error: friendlyError(error).message };
+        }
+      },
+      changeEmail: async (email: string) => {
+        try {
+          const { error } = await client.auth.updateUser({ email });
+          return error ? { ok: false, error: error.message } : { ok: true };
+        } catch (error) {
+          return { ok: false, error: friendlyError(error).message };
+        }
+      },
       getAccessToken: async () => {
         const { data, error } = await client.auth.getSession();
         if (error || !data.session) return null;
         return data.session.access_token;
       },
+      applyIdentity: (identity: AuthIdentity) => {
+        // Only refresh a session that is still authenticated; a pending
+        // sign-out must not be resurrected by a stale PATCH response.
+        setState(previous => (previous.status === "authed" ? { status: "authed", identity } : previous));
+      },
       retry: () => {
-        setEpoch(previous => previous + 1);
-        void client.auth.getSession().then(({ data }) => void applySession(data.session));
+        // Re-runs the restore effect (and its watchdog) without duplicating
+        // getSession calls here.
+        bumpEpoch();
       },
     };
-  }, [client, applySession]);
+  }, [client, applySession, bumpEpoch]);
 
   return (
     <AuthStateContext.Provider value={state}>

@@ -1,5 +1,7 @@
 """Profile provisioning for verified Supabase identities."""
 
+from collections.abc import Mapping
+
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
@@ -26,4 +28,21 @@ def provision_profile(db: Session, user: CurrentUser) -> Profile:
     if profile is None:
         # A missing auth.users row or concurrent external deletion should fail closed.
         raise RuntimeError("Verified Supabase user has no provisionable profile")
+    return profile
+
+
+def update_profile(
+    db: Session, user: CurrentUser, changes: Mapping[str, str | None]
+) -> Profile:
+    """Update self-service profile fields for the verified subject only."""
+
+    profile = provision_profile(db, user)
+    if "display_name" in changes:
+        display_name = changes["display_name"]
+        if display_name is None or not display_name.strip():
+            raise ValueError("Display name must not be blank")
+        profile.display_name = display_name
+    if "job_title" in changes:
+        profile.job_title = changes["job_title"]
+    db.flush()
     return profile

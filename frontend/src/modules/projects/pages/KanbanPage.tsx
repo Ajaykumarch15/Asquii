@@ -18,7 +18,7 @@ export function KanbanPage({ projectId, data, onEdit, onCreate, onUpdate, onReor
   const projectName = data.projects.find(project => project.id === projectId)?.name ?? "";
   const projectAbbr = projectName.split(/\s+/).map(word => word.charAt(0).toUpperCase()).join("").slice(0, 2);
   const taskKey = (task: Task) => `${projectAbbr}-${100 + Math.abs([...task.id].reduce((accumulator, character) => (accumulator * 31 + character.charCodeAt(0)) % 7919, 0)) % 800}`;
-  const tasks = data.tasks.filter(task => task.projectId === projectId && task.title.toLowerCase().includes(search.toLowerCase()) && (owner === "all" || task.ownerId === owner) && (label === "all" || task.labels.includes(label)) && (priority === "all" || task.priority === priority));
+  const tasks = data.tasks.filter(task => task.projectId === projectId && task.title.toLowerCase().includes(search.toLowerCase()) && (owner === "all" || task.ownerIds.includes(owner)) && (label === "all" || task.labels.includes(label)) && (priority === "all" || task.priority === priority));
   const ordered = (status: TaskStatus) => tasks.filter(task => task.status === status).sort((a, b) => a.order - b.order);
   const clearDrag = () => { setDragging(null); setTarget(null); };
   const dropInSection = (status: TaskStatus) => {

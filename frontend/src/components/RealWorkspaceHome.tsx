@@ -718,7 +718,7 @@ export function RealWorkspaceHome({ workspaceState, getAccessToken, identityUser
   const profiles = detail?.projectMembers ?? {};
   const projectCountFor = (userId: string) => Object.values(profiles).filter(rows => rows.some(row => row.user_id === userId)).length;
   const projectNamesForMember = (userId: string) => Object.entries(profiles).filter(([, rows]) => rows.some(row => row.user_id === userId)).map(([projectId]) => (projects ?? []).find(project => project.id === projectId)?.name).filter((name): name is string => Boolean(name));
-  const openTasksFor = (userId: string) => Object.values(detail?.tasks ?? {}).reduce((total, rows) => total + rows.filter(task => task.assignee_user_id === userId && task.status !== "Complete").length, 0);
+  const openTasksFor = (userId: string) => Object.values(detail?.tasks ?? {}).reduce((total, rows) => total + rows.filter(task => task.assignee_user_ids.includes(userId) && task.status !== "Complete").length, 0);
   const projectMemberCount = sortedMembers.filter(member => projectCountFor(member.user_id) > 0).length;
   const profileCapped = (projects ?? []).length > MAX_DASHBOARD_PROJECTS;
   const peopleFiltered = sortedMembers.filter(member =>

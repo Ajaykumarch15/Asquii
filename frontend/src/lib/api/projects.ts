@@ -53,6 +53,11 @@ export type ApiTaskStatus = "Backlog" | "To do" | "In progress" | "Dev completed
 export type ApiTaskPriority = "Low" | "Medium" | "High";
 export type ApiTaskSortBy = "created_at" | "updated_at" | "due_date" | "title" | "status" | "priority" | "position";
 
+export type ApiTaskAssignee = {
+  user_id: string;
+  display_name: string;
+};
+
 export type ApiTask = {
   id: string;
   workspace_id: string;
@@ -62,8 +67,8 @@ export type ApiTask = {
   labels: string[];
   status: ApiTaskStatus;
   due_date: string | null;
-  assignee_user_id: string | null;
-  assignee_display_name: string | null;
+  assignee_user_ids: string[];
+  assignees: ApiTaskAssignee[];
   priority: ApiTaskPriority;
   position: string;
   created_at: string;
@@ -96,6 +101,7 @@ export type TaskListFilters = {
   status?: ApiTaskStatus;
   q?: string;
   assignee_user_id?: string;
+  unassigned?: boolean;
   limit?: number;
   offset?: number;
   sort_by?: ApiTaskSortBy;
@@ -136,7 +142,7 @@ export interface ProjectsApi {
     status?: ApiTaskStatus;
     priority?: ApiTaskPriority;
     due_date?: string | null;
-    assignee_user_id?: string | null;
+    assignee_user_ids?: string[];
     /** Decimal ordering key; board quick-add appends past the column end. */
     position?: number;
   }): Promise<ApiTask>;
@@ -144,7 +150,7 @@ export interface ProjectsApi {
     status?: ApiTaskStatus;
     priority?: ApiTaskPriority;
     due_date?: string | null;
-    assignee_user_id?: string | null;
+    assignee_user_ids?: string[];
     title?: string;
     description?: string;
     /** Decimal ordering key; same-column reorders send only this field. */
@@ -310,6 +316,7 @@ function buildTaskQuery(filters?: TaskListFilters): string {
   if (filters?.status) params.push(`status=${encodeURIComponent(filters.status)}`);
   if (filters?.q) params.push(`q=${encodeURIComponent(filters.q)}`);
   if (filters?.assignee_user_id) params.push(`assignee_user_id=${encodeURIComponent(filters.assignee_user_id)}`);
+  if (filters?.unassigned) params.push("unassigned=true");
   if (filters?.limit) params.push(`limit=${filters.limit}`);
   if (filters?.offset) params.push(`offset=${filters.offset}`);
   if (filters?.sort_by) params.push(`sort_by=${filters.sort_by}`);

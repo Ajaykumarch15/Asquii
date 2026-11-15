@@ -87,7 +87,7 @@ def main() -> None:
         f"createrole={flags.rolcreaterole} createdb={flags.rolcreatedb}"
     )
     print(line)
-    print(f"SELECT grants on public tables: {grants} (expected 15)")
+    print(f"SELECT grants on public tables: {grants} (expected 16)")
     print(f"PASSWORD={password}")
 
 

@@ -12,6 +12,10 @@ type HeaderProps = {
   currentPerson?: Person; personaOpen: boolean; setPersonaOpen: Dispatch<SetStateAction<boolean>>; people: Person[]; role: WorkspaceRole; personaId: string; onSelectPersona: (id: string) => void;
   chooseWorkspace: (id: string) => void; chooseProject: (id: string) => void; onCreateWorkspace: () => void;
   account?: { name: string; email: string | null } | null; onShowSignIn: () => void; onSignOut: () => void;
+  /** Opens the signed-in profile page from the account menu. */
+  onOpenProfile: () => void;
+  /** Opens the signed-in account settings page from the account menu. */
+  onOpenAccountSettings: () => void;
   /** Set only while an anonymous visitor is inside the prototype demo. */
   onBackToLanding?: () => void;
 };
@@ -20,7 +24,7 @@ const notificationTones = { danger: "bg-danger-soft text-danger", warning: "bg-w
 function notificationIcon(kind: NotificationItem["kind"]) { return kind === "task" ? <ListTodo size={14} /> : kind === "invite" ? <BriefcaseBusiness size={14} /> : kind === "meeting" ? <Video size={14} /> : kind === "milestone" ? <CalendarDays size={14} /> : <FolderOpen size={14} />; }
 const notificationPages: Record<Exclude<NotificationItem["kind"], "invite">, string> = { task: "Tasks", meeting: "Meetings", milestone: "Overview", resource: "Resources" };
 
-export function Header({ scope, active, workspace, workspaces, projects, project, setMobileOpen, switcherOpen, setSwitcherOpen, setPaletteOpen, unreadCount, bellOpen, setBellOpen, notifications, onMarkAllNotificationsRead, onReadNotification, navigate, onOpenProjectPage, theme, onToggleTheme, onQuickCreate, currentPerson, personaOpen, setPersonaOpen, people, role, personaId, onSelectPersona, chooseWorkspace, chooseProject, onCreateWorkspace, account, onShowSignIn, onSignOut, onBackToLanding }: HeaderProps) {
+export function Header({ scope, active, workspace, workspaces, projects, project, setMobileOpen, switcherOpen, setSwitcherOpen, setPaletteOpen, unreadCount, bellOpen, setBellOpen, notifications, onMarkAllNotificationsRead, onReadNotification, navigate, onOpenProjectPage, theme, onToggleTheme, onQuickCreate, currentPerson, personaOpen, setPersonaOpen, people, role, personaId, onSelectPersona, chooseWorkspace, chooseProject, onCreateWorkspace, account, onOpenProfile, onOpenAccountSettings, onShowSignIn, onSignOut, onBackToLanding }: HeaderProps) {
   return (
     <header className="fixed inset-x-0 top-0 z-40 flex h-14 items-center justify-between border-b border-line bg-surface px-3 sm:px-4 md:px-5">
       <div className="flex min-w-0 items-center gap-3">
@@ -70,6 +74,9 @@ export function Header({ scope, active, workspace, workspaces, projects, project
                 {account.email && <p className="mt-0.5 truncate text-[10px] text-muted">{account.email}</p>}
                 <p className="mt-1 text-[10px] text-muted">Signed in · workspace data is live from the API</p>
               </div>
+              <button className="menu-row flex w-full items-center gap-2.5" onClick={() => { setPersonaOpen(false); onOpenProfile(); }}><UserRound size={15} />View profile</button>
+              <button className="menu-row flex w-full items-center gap-2.5" onClick={() => { setPersonaOpen(false); onOpenAccountSettings(); }}><Settings2 size={15} />Account settings</button>
+              <div className="my-1 border-t border-line" />
               <button className="menu-row flex w-full items-center gap-2.5 text-danger" onClick={() => { setPersonaOpen(false); onSignOut(); }}>Sign out</button>
             </div>}
           </div>

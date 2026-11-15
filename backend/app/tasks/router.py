@@ -145,7 +145,7 @@ def update_task_assignee(
             project_id,
             task_id,
             user.user_id,
-            {"assignee_user_id": body.assignee_user_id},
+            {"assignee_user_ids": body.assignee_user_ids},
         )
     )
 

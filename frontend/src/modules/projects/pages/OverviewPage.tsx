@@ -26,7 +26,7 @@ export function ProjectOverviewPage({ project, data, canManage, onEditProject, o
   });
   const activity = [
     ...tasks.filter(task => task.comments.length).map(task => ({ key: task.id, title: `${data.people.find(person => person.id === task.comments[task.comments.length - 1].personId)?.name ?? "A teammate"} commented on ${task.title}`, detail: task.comments[task.comments.length - 1].text, date: task.comments[task.comments.length - 1].at })),
-    ...doneTasks.slice(0, 3).map(task => ({ key: `done-${task.id}`, title: `${data.people.find(person => person.id === task.ownerId)?.name ?? "A teammate"} completed ${task.title}`, detail: "Task completed", date: task.due })),
+    ...doneTasks.slice(0, 3).map(task => ({ key: `done-${task.id}`, title: `${task.ownerIds.map(id => data.people.find(person => person.id === id)?.name ?? "").filter(Boolean).join(", ") || "A teammate"} completed ${task.title}`, detail: "Task completed", date: task.due })),
     ...projectResources.slice(0, 3).map(resource => ({ key: resource.id, title: `${data.people.find(person => person.id === resource.ownerId)?.name ?? "A teammate"} added a resource`, detail: resource.name, date: resource.updatedAt }))
   ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
   const owner = members.find(person => /admin|lead/i.test(person.role)) ?? members[0];
