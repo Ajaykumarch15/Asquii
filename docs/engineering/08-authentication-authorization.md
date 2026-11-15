@@ -15,7 +15,7 @@ FastAPI now verifies bearer tokens using PyJWT. The default signing method is as
 
 JWKS is cached per process for a configured 30–3600 second TTL (300 seconds by default). Refreshes for unknown key IDs are rate-limited to at most one per 30 seconds; unknown keys fail closed. A fresh cache can serve while refresh is unavailable, but missing/expired cache plus an unavailable endpoint returns a sanitized 503. Legacy HS256 is an explicit opt-in setting and uses HS256 only with a separately configured secret. See [17](17-sprint-3-implementation-report.md) for test coverage and remaining staging verification.
 
-`GET /api/v1/auth/me` is authenticated. It returns the verified user ID/email and persisted safe profile fields. A missing profile is inserted with the verified subject using PostgreSQL `ON CONFLICT DO NOTHING`; existing user-edited values are not overwritten. The SQLAlchemy request session is configured with transaction-local identity context as described below; actual `auth.uid()` behavior remains unverified.
+`GET /api/v1/auth/me` is authenticated. It returns the verified user ID/email and persisted safe profile fields. A missing profile is inserted with the verified subject using PostgreSQL `ON CONFLICT DO NOTHING`; existing user-edited values are not overwritten. `PATCH /api/v1/auth/me` updates only `display_name`/`job_title` for the verified subject; email, user ID, and roles are never client-editable. Password and email changes stay in the Supabase SDK (`updateUser`) and are never proxied through FastAPI. The SQLAlchemy request session is configured with transaction-local identity context as described below; actual `auth.uid()` behavior remains unverified.
 
 ### Sprint 4 workspace authorization behavior
 

@@ -8,7 +8,7 @@ from app.models.profile import Profile
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.resource import Resource, UserResourcePreference
-from app.models.task import Task, TaskComment, TaskSubtask
+from app.models.task import Task, TaskAssignee, TaskComment, TaskSubtask
 from app.models.workspace import Workspace
 from app.models.workspace_invitation import WorkspaceInvitation
 from app.models.workspace_member import WorkspaceMember
@@ -24,6 +24,7 @@ __all__ = [
     "ProjectMember",
     "Resource",
     "Task",
+    "TaskAssignee",
     "TaskComment",
     "TaskSubtask",
     "UserResourcePreference",

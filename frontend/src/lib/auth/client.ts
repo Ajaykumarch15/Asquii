@@ -15,6 +15,24 @@ export type ResolvedAuthConfig =
 const configuredUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const configuredKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
+/**
+ * Supabase Auth's built-in fetch has no timeout. A token-refresh request that
+ * was in flight when the machine slept (or when the network dropped) can stay
+ * pending indefinitely. Because `initialize()` / `getSession()` await that
+ * refresh, the whole auth provider would then stay in `loading` forever: the
+ * landing page renders with a permanently disabled sign-in button, while the
+ * stale session remains in localStorage. Aborting stalled auth requests makes
+ * the SDK treat them as retryable failures, so initialization always settles
+ * and the app can fall back to the signed-out state.
+ */
+const AUTH_REQUEST_TIMEOUT_MS = 10_000;
+
+const fetchWithTimeout: typeof fetch = (input, init) => {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), AUTH_REQUEST_TIMEOUT_MS);
+  return fetch(input, { ...init, signal: controller.signal }).finally(() => window.clearTimeout(timer));
+};
+
 let cached: ResolvedAuthConfig | null = null;
 
 function resolve(): ResolvedAuthConfig {
@@ -36,6 +54,7 @@ function resolve(): ResolvedAuthConfig {
   }
 
   const client = createClient(configuredUrl as string, configuredKey as string, {
+    global: { fetch: fetchWithTimeout },
     auth: {
       persistSession: true,
       autoRefreshToken: true,

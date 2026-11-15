@@ -1,5 +1,5 @@
 import { CalendarDays, Check, CircleDot, Flag, Grab, ListChecks, Plus, X } from "lucide-react";
-import { Avatar, Badge, Button, EmptyState, Select } from "../../../components/ui";
+import { AvatarGroup, Badge, Button, EmptyState, Select } from "../../../components/ui";
 import { isOverdueTask, type AppData, type Task, type TaskStatus } from "../../../model";
 
 const taskStatuses: TaskStatus[] = ["Backlog", "To do", "In progress", "Dev completed", "In review", "Complete"];
@@ -13,15 +13,13 @@ export function Kpi({ icon, label, value, sub }: { icon: React.ReactNode; label:
 }
 
 export function TaskListRow({ task, data, onEdit, onUpdate }: { task: Task; data: AppData; onEdit: () => void; onUpdate: (patch: Partial<Task>) => void }) {
-  const owner = data.people.find(person => person.id === task.ownerId);
+  const owners = data.people.filter(person => task.ownerIds.includes(person.id));
   const isOverdue = isOverdueTask(task);
-  return <div className="flex items-center gap-3 px-4 py-3 sm:px-5"><button className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${task.status === "Complete" ? "bg-success-soft text-success" : isOverdue ? "bg-danger-soft text-danger" : "bg-hover text-secondary"}`} onClick={() => onUpdate({ status: task.status === "Complete" ? "To do" : "Complete" })} aria-label={`Mark ${task.title} ${task.status === "Complete" ? "incomplete" : "complete"}`}>{task.status === "Complete" ? <Check size={14} /> : <CircleDot size={14} />}</button><button className="min-w-0 flex-1 text-left" onClick={onEdit}><span className="block truncate text-xs font-medium">{task.title}</span><span className={`mt-1 block text-[10px] ${isOverdue ? "font-medium text-danger" : "text-muted"}`}>{isOverdue ? "Overdue · due " : "Due "}{formatDate(task.due)}</span></button><Badge tone={task.priority === "High" ? "danger" : task.priority === "Medium" ? "warning" : "neutral"}>{task.priority}</Badge>{owner && <Avatar name={owner.name} size="sm" />}</div>;
+  return <div className="flex items-center gap-3 px-4 py-3 sm:px-5"><button className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${task.status === "Complete" ? "bg-success-soft text-success" : isOverdue ? "bg-danger-soft text-danger" : "bg-hover text-secondary"}`} onClick={() => onUpdate({ status: task.status === "Complete" ? "To do" : "Complete" })} aria-label={`Mark ${task.title} ${task.status === "Complete" ? "incomplete" : "complete"}`}>{task.status === "Complete" ? <Check size={14} /> : <CircleDot size={14} />}</button><button className="min-w-0 flex-1 text-left" onClick={onEdit}><span className="block truncate text-xs font-medium">{task.title}</span><span className={`mt-1 block text-[10px] ${isOverdue ? "font-medium text-danger" : "text-muted"}`}>{isOverdue ? "Overdue · due " : "Due "}{formatDate(task.due)}</span></button><Badge tone={task.priority === "High" ? "danger" : task.priority === "Medium" ? "warning" : "neutral"}>{task.priority}</Badge>{owners.length > 0 && <AvatarGroup names={owners.map(owner => owner.name)} />}</div>;
 }
 
 export function KanbanCard({ task, data, isDragging, isInsertTarget, onDragStart, onDragOverCard, onDropCard, onDragEnd, onEdit, onUpdate }: { task: Task; data: AppData; isDragging: boolean; isInsertTarget: boolean; onDragStart: () => void; onDragOverCard: (event: React.DragEvent) => void; onDropCard: (event: React.DragEvent) => void; onDragEnd: () => void; onEdit: () => void; onUpdate: (patch: Partial<Task>) => void }) {
-  const owner = data.people.find(person => person.id === task.ownerId);
-  const ownerIndex = Math.abs(data.people.findIndex(person => person.id === task.ownerId));
-  const ownerColor = (["violet", "blue", "green", "orange"] as const)[ownerIndex % 4];
+  const owners = data.people.filter(person => task.ownerIds.includes(person.id));
   const isComplete = task.status === "Complete";
   const isOverdue = isOverdueTask(task);
   return <article draggable onDragStart={event => { event.dataTransfer.effectAllowed = "move"; onDragStart(); }} onDragOver={onDragOverCard} onDrop={onDropCard} onDragEnd={onDragEnd} className={`group flex items-start gap-3 cursor-grab rounded-lg border bg-surface p-4 shadow-sm transition hover:shadow-md active:cursor-grabbing ${isComplete ? "border-success-soft" : "border-line"} ${isDragging ? "opacity-40" : ""} ${isInsertTarget ? "ring-2 ring-brand" : ""}`}>
@@ -34,7 +32,7 @@ export function KanbanCard({ task, data, isDragging, isInsertTarget, onDragStart
       <div className="mt-3 space-y-1.5 border-t border-line pt-3">
         <p className="flex items-center gap-1.5 text-[11px] font-medium"><span className={`inline-flex items-center gap-1.5 ${task.priority === "High" ? "text-danger" : task.priority === "Medium" ? "text-warning" : "text-muted"}`}><Flag size={12} className="fill-current opacity-90" />{task.priority}</span></p>
         <p className={`flex items-center gap-1 text-[10px] ${isOverdue ? "font-medium text-danger" : "text-muted"}`}><CalendarDays size={11} className="shrink-0" />{formatDate(task.due)}</p>
-        {owner && <div className="flex items-center gap-2"><Avatar name={owner.name} size="sm" color={ownerColor} /><span className="truncate text-[11px] text-secondary">{owner.name}</span></div>}
+        {owners.length > 0 && <div className="flex items-center gap-2"><AvatarGroup names={owners.map(owner => owner.name)} /><span className="truncate text-[11px] text-secondary">{owners.map(owner => owner.name).join(", ")}</span></div>}
       </div>
       <Select aria-label={`Move ${task.title} to another column`} className="mt-2.5" value={task.status} onChange={event => onUpdate({ status: event.target.value as TaskStatus })}>{taskStatuses.map(value => <option key={value}>{value}</option>)}</Select>
     </div>

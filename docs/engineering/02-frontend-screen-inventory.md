@@ -10,6 +10,8 @@ Verified: no URL router or named URL routes. `App.tsx` keeps `scope` (`workspace
 | Workspace projects | `.../workspace/pages/ProjectsPage.tsx` | workspace / Projects | Search, filters, sorting, grid/list, CSV import/export, project cards/rows |
 | Workspace people | `.../workspace/pages/PeoplePage.tsx` | workspace / People | Members, invitations, roles, filtering, bulk role updates, CSV export |
 | Workspace settings | `.../workspace/pages/SettingsPage.tsx` | workspace / Settings | General details, member roles, appearance, notification preferences |
+| My profile (signed in) | `frontend/src/components/ProfilePage.tsx` | workspace / Profile | Read-only email/account id; editable display name and job title; account menu entry |
+| Account settings (signed in) | `frontend/src/components/AccountSettingsPage.tsx` | workspace / Account settings | Read-only account summary, theme, browser-local notification preferences, Supabase password/email change |
 | Project overview | `.../projects/pages/OverviewPage.tsx` | project / Overview | Project progress, tasks, meetings, milestones, members |
 | Project people | `.../projects/pages/PeoplePage.tsx` | project / People | Project member listing/management affordances |
 | Project settings | `.../projects/pages/SettingsPage.tsx` | project / Settings | Project summary and navigation/settings affordances |

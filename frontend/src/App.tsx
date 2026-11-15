@@ -23,6 +23,8 @@ import { useRealWorkspaces } from "./lib/real/useRealWorkspaces";
 import { RealWorkspaceHome } from "./components/RealWorkspaceHome";
 import { RealProjectsPage } from "./components/RealProjectsPage";
 import { RealProjectDetailPage, REAL_PROJECT_TABS, type RealProjectTab } from "./components/RealProjectDetailPage";
+import { ProfilePage } from "./components/ProfilePage";
+import { AccountSettingsPage } from "./components/AccountSettingsPage";
 import { workspaceApi, type ApiWorkspace } from "./lib/api/workspace";
 import { type ApiProject } from "./lib/api/projects";
 import { useRealProjects } from "./lib/real/useRealProjects";
@@ -174,7 +176,7 @@ export default function App() {
     type Draft = { id: string; kind: NotificationItem["kind"]; title: string; detail: string; tone: NotificationItem["tone"]; projectId?: string };
     const drafts: Draft[] = [];
     if (prefs.taskAssignments) for (const task of workspaceTasks) {
-      if (task.ownerId !== personaId || task.status === "Complete" || !task.due) continue;
+      if (!task.ownerIds.includes(personaId) || task.status === "Complete" || !task.due) continue;
       const date = new Date(`${task.due}T00:00:00`);
       if (Number.isNaN(date.getTime())) continue;
       const overdue = date < today, dueSoon = date >= today && date <= soon;
@@ -244,6 +246,18 @@ export default function App() {
       window.history.pushState({ asquiiView: "app" }, "", window.location.pathname + window.location.search);
     }
   };
+  /** Open the signed-in account profile; leaves any project drill-down. */
+  const openProfile = () => {
+    if (realProjectId !== null) closeRealProject();
+    setScope("workspace");
+    setActive("Profile");
+  };
+  /** Open the signed-in account settings; leaves any project drill-down. */
+  const openAccountSettings = () => {
+    if (realProjectId !== null) closeRealProject();
+    setScope("workspace");
+    setActive("Account settings");
+  };
   /** Drill into a workspace project (shell deep-link URL included). */
   const openRealProject = (id: string, tab: RealProjectTab = "overview") => {
     setRealProjectId(id);
@@ -261,6 +275,14 @@ export default function App() {
     }
   };
   const navigate = (item: string) => {
+    if (item === "Profile") {
+      openProfile();
+      return;
+    }
+    if (item === "Account settings") {
+      openAccountSettings();
+      return;
+    }
     if (signedIn && realProjectScope) {
       // Project-tab clicks (sidebar, palette, breadcrumb) stay inside the
       // drill-down instead of hitting workspace pages that do not exist here.
@@ -317,7 +339,7 @@ export default function App() {
   };
   const saveTask = (input: Omit<Task, "id">, id?: string) => {
     const target = data.projects.find(project => project.id === input.projectId);
-    if (!target || !projectAccess(target) || !target.personIds.includes(input.ownerId)) return;
+    if (!target || !projectAccess(target) || !input.ownerIds.every(id => target.personIds.includes(id))) return;
     setData(previous => id
       ? { ...previous, tasks: previous.tasks.map(task => task.id === id && task.projectId === target.id ? { ...input, id } : task) }
       : { ...previous, tasks: [...previous.tasks, { ...input, id: createId("task"), order: Math.max(-1, ...previous.tasks.filter(item => item.projectId === input.projectId).map(item => item.order)) + 1 }] });
@@ -336,7 +358,7 @@ export default function App() {
   });
   const updateTask = (id: string, patch: Partial<Task>) => setData(previous => ({ ...previous, tasks: previous.tasks.map(task => {
     const project = previous.projects.find(item => item.id === task.projectId);
-    return task.id === id && project && projectAccess(project) && (!patch.ownerId || project.personIds.includes(patch.ownerId)) ? { ...task, ...patch } : task;
+    return task.id === id && project && projectAccess(project) && (!patch.ownerIds || patch.ownerIds.every(ownerId => project.personIds.includes(ownerId))) ? { ...task, ...patch } : task;
   }) }));
   const deleteTask = (taskId: string) => setData(previous => ({ ...previous, tasks: previous.tasks.filter(task => task.id !== taskId) }));
   const saveSettings = (settings: Workspace) => { if (!canAdmin) return; setData(previous => ({ ...previous, workspaces: previous.workspaces.map(item => item.id === settings.id ? settings : item) })); };
@@ -475,7 +497,7 @@ export default function App() {
         />
       </div>
     ) : (
-    <AppShell scope={realProjectScope ? "project" : signedIn ? "workspace" : scope} active={realProjectScope ? realProjectTab.charAt(0).toUpperCase() + realProjectTab.slice(1) : signedIn && !["Projects", "People", "Settings"].includes(active) ? "Overview" : active} projectNav={realProjectScope} onNavigate={navigate} workspace={displayWorkspace} workspaces={displayWorkspaces} projects={displayProjects} project={displaySelectedProject} tasks={signedIn ? [] as Task[] : workspaceTasks} people={signedIn ? [] as Person[] : data.people} personaId={personaId} role={displayRole} canAdmin={displayCanAdmin} notifications={notifications} onSelectWorkspace={selectWorkspace} onSelectProject={selectProject} onSelectPersona={setPersonaId} onCreateWorkspace={() => setWorkspaceEditorOpen(true)} onOpenProjectPage={openProjectPage} onReadNotification={markNotificationRead} onMarkAllNotificationsRead={markAllNotificationsRead} recentProjectIds={recentIds} onCreateProject={!signedIn && displayCanAdmin ? openCreateProject : undefined} onCreateTask={!signedIn && selectedProject ? () => openCreateTask() : undefined} onCreateMeeting={!signedIn && selectedProject ? openCreateMeeting : undefined} onCreateResource={!signedIn && selectedProject ? openCreateResource : undefined} onQuickCreate={!signedIn ? openQuickCreate : undefined} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} account={account} onShowSignIn={openSignIn} onSignOut={() => void handleSignOut()} onBackToLanding={!signedIn && demoMode ? exitDemo : undefined}>
+    <AppShell scope={realProjectScope ? "project" : signedIn ? "workspace" : scope} active={realProjectScope ? realProjectTab.charAt(0).toUpperCase() + realProjectTab.slice(1) : signedIn && !["Projects", "People", "Settings", "Profile", "Account settings"].includes(active) ? "Overview" : active} projectNav={realProjectScope} onNavigate={navigate} workspace={displayWorkspace} workspaces={displayWorkspaces} projects={displayProjects} project={displaySelectedProject} tasks={signedIn ? [] as Task[] : workspaceTasks} people={signedIn ? [] as Person[] : data.people} personaId={personaId} role={displayRole} canAdmin={displayCanAdmin} notifications={notifications} onSelectWorkspace={selectWorkspace} onSelectProject={selectProject} onSelectPersona={setPersonaId} onCreateWorkspace={() => setWorkspaceEditorOpen(true)} onOpenProjectPage={openProjectPage} onReadNotification={markNotificationRead} onMarkAllNotificationsRead={markAllNotificationsRead} recentProjectIds={recentIds} onCreateProject={!signedIn && displayCanAdmin ? openCreateProject : undefined} onCreateTask={!signedIn && selectedProject ? () => openCreateTask() : undefined} onCreateMeeting={!signedIn && selectedProject ? openCreateMeeting : undefined} onCreateResource={!signedIn && selectedProject ? openCreateResource : undefined} onQuickCreate={!signedIn ? openQuickCreate : undefined} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} account={account} onOpenProfile={openProfile} onOpenAccountSettings={openAccountSettings} onShowSignIn={openSignIn} onSignOut={() => void handleSignOut()} onBackToLanding={!signedIn && demoMode ? exitDemo : undefined}>
     {storageError && <div role="alert" className="ui-error-banner mb-5"><span className="flex-1">{storageError}</span><button className="icon-button -my-1 text-danger" aria-label="Dismiss message" onClick={clearStorageError}><X size={15} /></button></div>}
     {auth.status === "error" && (
       <div role="alert" className="ui-error-banner mb-5 !items-center">
@@ -485,7 +507,11 @@ export default function App() {
     )}
     {signedIn ? <>
         {workspaceNotice && <div role="status" className={`mb-5 rounded-xl border border-line px-4 py-3 text-xs font-medium ${workspaceNotice.tone === "success" ? "bg-brand-soft text-brand" : "bg-danger-soft text-danger"}`}>{workspaceNotice.text}</div>}
-        {active === "Projects"
+        {active === "Profile" && auth.status === "authed"
+          ? <ProfilePage identity={auth.identity} getAccessToken={authActions.getAccessToken} onIdentityChange={authActions.applyIdentity} />
+          : active === "Account settings" && auth.status === "authed"
+          ? <AccountSettingsPage identity={auth.identity} theme={theme} onToggleTheme={() => setTheme(previous => previous === "light" ? "dark" : "light")} onOpenProfile={openProfile} onChangePassword={authActions.changePassword} onChangeEmail={authActions.changeEmail} />
+          : active === "Projects"
           ? (realProjectId
             ? <RealProjectDetailPage workspaceState={realWorkspaces} projectId={realProjectId} getAccessToken={authActions.getAccessToken} identityUserId={identityUserId} activeTab={realProjectTab} onTabChange={changeRealProjectTab} />
             : <RealProjectsPage workspaceState={realWorkspaces} getAccessToken={authActions.getAccessToken} onOpenProject={id => openRealProject(id)} />)

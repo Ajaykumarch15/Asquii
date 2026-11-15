@@ -565,9 +565,13 @@ function KanbanPanel({ workspaceId, projectId, members, isCollaborator, archived
                               {formatDay(task.due_date)}
                             </span>
                           )}
-                          <span className="ml-auto grid h-5 w-5 place-items-center rounded-full bg-hover text-[8px] font-semibold text-secondary" title={task.assignee_display_name ?? "Unassigned"}>
-                            {task.assignee_display_name ? task.assignee_display_name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase() : "—"}
-                          </span>
+                          {task.assignees.length > 0 ? (
+                            <span className="ml-auto" title={task.assignees.map(assignee => assignee.display_name).join(", ")}>
+                              <AvatarGroup names={task.assignees.map(assignee => assignee.display_name)} />
+                            </span>
+                          ) : (
+                            <span className="ml-auto grid h-5 w-5 place-items-center rounded-full bg-hover text-[8px] font-semibold text-secondary" title="Unassigned">—</span>
+                          )}
                         </div>
                       </article>
                     </div>
@@ -617,7 +621,7 @@ function KanbanPanel({ workspaceId, projectId, members, isCollaborator, archived
                 <p className="truncate text-sm font-semibold text-heading">{expandedTask.title}</p>
                 <p className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-muted">
                   <Badge tone={taskStatusTone[expandedTask.status]}>{expandedTask.status}</Badge>
-                  <span>{expandedTask.assignee_display_name ?? "Unassigned"}</span>
+                  <span>{expandedTask.assignees.map(assignee => assignee.display_name).join(", ") || "Unassigned"}</span>
                   <span>Due {shortDate(expandedTask.due_date)}</span>
                 </p>
               </div>
@@ -670,7 +674,7 @@ function TasksPanel({ workspaceId, projectId, project, members, isCollaborator, 
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<ApiTaskStatus>("To do");
   const [priority, setPriority] = useState<ApiTaskPriority>("Medium");
-  const [assignee, setAssignee] = useState("" as string);
+  const [assignees, setAssignees] = useState<string[]>([]);
   const [dueDate, setDueDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -686,7 +690,8 @@ function TasksPanel({ workspaceId, projectId, project, members, isCollaborator, 
           limit: 100,
           status: statusFilter || undefined,
           q: search.trim() || undefined,
-          assignee_user_id: assigneeFilter || undefined,
+          assignee_user_id: assigneeFilter && assigneeFilter !== "none" ? assigneeFilter : undefined,
+          unassigned: assigneeFilter === "none" ? true : undefined,
           sort_by: "position",
         });
         if (disposed) return;
@@ -707,7 +712,7 @@ function TasksPanel({ workspaceId, projectId, project, members, isCollaborator, 
     setDescription(task.description);
     setStatus(task.status);
     setPriority(task.priority);
-    setAssignee(task.assignee_user_id ?? "");
+    setAssignees(task.assignee_user_ids);
     setDueDate(task.due_date ?? "");
     setEditId(task.id);
     setFormError(null);
@@ -719,7 +724,7 @@ function TasksPanel({ workspaceId, projectId, project, members, isCollaborator, 
     setDescription("");
     setStatus("To do");
     setPriority("Medium");
-    setAssignee("");
+    setAssignees([]);
     setDueDate("");
     setEditId(null);
     setFormError(null);
@@ -749,14 +754,18 @@ function TasksPanel({ workspaceId, projectId, project, members, isCollaborator, 
           status?: ApiTaskStatus;
           priority?: ApiTaskPriority;
           due_date?: string | null;
-          assignee_user_id?: string | null;
+          assignee_user_ids?: string[];
         } = {};
         if (title.trim() !== editing.title) patch.title = title.trim();
         if (description.trim() !== editing.description) patch.description = description.trim();
         if (status !== editing.status) patch.status = status;
         if (priority !== editing.priority) patch.priority = priority;
         if (dueDate !== (editing.due_date ?? "")) patch.due_date = dueDate || null;
-        if (assignee !== (editing.assignee_user_id ?? "")) patch.assignee_user_id = assignee || null;
+        const storedAssignees = [...editing.assignee_user_ids].sort();
+        const draftAssignees = [...assignees].sort();
+        if (storedAssignees.length !== draftAssignees.length || storedAssignees.some((id, index) => id !== draftAssignees[index])) {
+          patch.assignee_user_ids = assignees;
+        }
         if (Object.keys(patch).length === 0) {
           onNotice("");
           resetTaskForm();
@@ -772,7 +781,7 @@ function TasksPanel({ workspaceId, projectId, project, members, isCollaborator, 
           description: description.trim(),
           status,
           priority,
-          assignee_user_id: assignee || null,
+          assignee_user_ids: assignees,
           due_date: dueDate || null,
         });
         setTasks(previous => [created, ...previous]);
@@ -858,10 +867,23 @@ function TasksPanel({ workspaceId, projectId, project, members, isCollaborator, 
             <option value="Medium">Medium</option>
             <option value="High">High</option>
           </Select>
-          <Select label="Assignee" value={assignee} onChange={event => setAssignee(event.target.value)}>
-            <option value="">Unassigned</option>
-            {members.map(member => <option key={member.user_id} value={member.user_id}>{member.display_name}</option>)}
-          </Select>
+          <div className="space-y-1.5">
+            <span className="ui-label">Assignees</span>
+            <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-line bg-surface p-2">
+              {members.length === 0 && <p className="text-xs text-muted">No project members available.</p>}
+              {members.map(member => (
+                <label key={member.user_id} className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    className="accent-brand"
+                    checked={assignees.includes(member.user_id)}
+                    onChange={event => setAssignees(previous => event.target.checked ? [...previous, member.user_id] : previous.filter(id => id !== member.user_id))}
+                  />
+                  {member.display_name}
+                </label>
+              ))}
+            </div>
+          </div>
           <label className="block space-y-1.5">
             <span className="ui-label">Due date</span>
             <input type="date" className="ui-input" value={dueDate} onChange={event => setDueDate(event.target.value)} />
@@ -902,7 +924,7 @@ function TasksPanel({ workspaceId, projectId, project, members, isCollaborator, 
                     </div>
                     {task.description && <p className="mt-1 line-clamp-2 text-xs text-muted">{task.description}</p>}
                     <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted">
-                      <span>{task.assignee_display_name ?? "Unassigned"}</span>
+                      <span>{task.assignees.map(assignee => assignee.display_name).join(", ") || "Unassigned"}</span>
                       <span>Due {formatDay(task.due_date)}</span>
                       <span className={expanded ? "text-brand" : ""}>{expanded ? "Hide details" : "Details"}</span>
                     </p>

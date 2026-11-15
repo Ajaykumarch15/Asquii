@@ -7,14 +7,14 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from app.models.activity_log import ActivityLog
 from app.models.profile import Profile
 from app.models.project_member import ProjectMember
-from app.models.task import Task, TaskComment, TaskSubtask
+from app.models.task import Task, TaskAssignee, TaskComment, TaskSubtask
 from app.models.workspace_member import WorkspaceMember
 from app.projects.service import get_project_context, record_project_activity
 
@@ -64,38 +64,42 @@ def _require_task_moderator(access) -> None:
         raise HTTPException(status_code=403, detail="Task deletion denied")
 
 
-def _validate_assignee(
+def _validate_assignees(
     db: Session,
     workspace_id: UUID,
     project_id: UUID,
-    assignee_user_id: UUID | None,
-) -> None:
-    if assignee_user_id is None:
-        return
-    member = db.scalar(
-        select(ProjectMember.user_id)
-        .join(
-            WorkspaceMember,
-            (WorkspaceMember.workspace_id == ProjectMember.workspace_id)
-            & (WorkspaceMember.user_id == ProjectMember.user_id),
-        )
-        .where(
-            ProjectMember.workspace_id == workspace_id,
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == assignee_user_id,
-            WorkspaceMember.removed_at.is_(None),
-        )
-        .with_for_update()
+    assignee_user_ids: list[UUID],
+) -> list[UUID]:
+    """Return the de-duplicated assignee ids after checking project membership."""
+
+    unique_ids = list(dict.fromkeys(assignee_user_ids))
+    if not unique_ids:
+        return []
+    member_ids = set(
+        db.scalars(
+            select(ProjectMember.user_id)
+            .join(
+                WorkspaceMember,
+                (WorkspaceMember.workspace_id == ProjectMember.workspace_id)
+                & (WorkspaceMember.user_id == ProjectMember.user_id),
+            )
+            .where(
+                ProjectMember.workspace_id == workspace_id,
+                ProjectMember.project_id == project_id,
+                ProjectMember.user_id.in_(unique_ids),
+                WorkspaceMember.removed_at.is_(None),
+            )
+        ).all()
     )
-    if member is None:
+    if member_ids != set(unique_ids):
         raise HTTPException(
             status_code=422,
-            detail="Assignee must be an active member of this project",
+            detail="Assignees must be active members of this project",
         )
+    return unique_ids
 
 
 def _task_projection():
-    assignee_profile = aliased(Profile)
     creator_profile = aliased(Profile)
     creator_id = (
         select(ActivityLog.actor_user_id)
@@ -113,18 +117,35 @@ def _task_projection():
     statement = (
         select(
             Task,
-            assignee_profile.display_name,
             creator_id,
             creator_profile.display_name,
         )
-        .outerjoin(assignee_profile, assignee_profile.user_id == Task.assignee_user_id)
         .outerjoin(creator_profile, creator_profile.user_id == creator_id)
     )
     return statement
 
 
-def _task_response_row(row) -> dict[str, object]:
-    task, assignee_name, creator_id, creator_name = row
+def _assignees_by_task(
+    db: Session, task_ids: list[UUID]
+) -> dict[UUID, list[dict[str, object]]]:
+    if not task_ids:
+        return {}
+    rows = db.execute(
+        select(TaskAssignee.task_id, TaskAssignee.user_id, Profile.display_name)
+        .outerjoin(Profile, Profile.user_id == TaskAssignee.user_id)
+        .where(TaskAssignee.task_id.in_(task_ids))
+        .order_by(TaskAssignee.task_id, Profile.display_name, TaskAssignee.user_id)
+    ).all()
+    grouped: dict[UUID, list[dict[str, object]]] = {}
+    for task_id, user_id, display_name in rows:
+        grouped.setdefault(task_id, []).append(
+            {"user_id": user_id, "display_name": display_name or "Unknown user"}
+        )
+    return grouped
+
+
+def _task_response_row(row, assignees: list[dict[str, object]]) -> dict[str, object]:
+    task, creator_id, creator_name = row
     return {
         "id": task.id,
         "workspace_id": task.workspace_id,
@@ -134,8 +155,8 @@ def _task_response_row(row) -> dict[str, object]:
         "labels": task.labels,
         "status": task.status,
         "due_date": task.due_date,
-        "assignee_user_id": task.assignee_user_id,
-        "assignee_display_name": assignee_name,
+        "assignee_user_ids": [item["user_id"] for item in assignees],
+        "assignees": assignees,
         "priority": task.priority,
         "position": task.position,
         "created_at": task.created_at,
@@ -147,7 +168,8 @@ def _task_response_row(row) -> dict[str, object]:
 
 def _get_task_response(db: Session, task_id: UUID) -> dict[str, object]:
     row = db.execute(_task_projection().where(Task.id == task_id)).one()
-    return _task_response_row(row)
+    assignees = _assignees_by_task(db, [task_id]).get(task_id, [])
+    return _task_response_row(row, assignees)
 
 
 def _activity(
@@ -183,7 +205,7 @@ def create_task(
     labels: list[str],
     status: str,
     due_date: date | None,
-    assignee_user_id: UUID | None,
+    assignee_user_ids: list[UUID],
     priority: str,
     position: Decimal,
 ) -> dict[str, object]:
@@ -193,7 +215,7 @@ def create_task(
         )
         _require_active_project(project)
         _require_collaborator(access)
-        _validate_assignee(db, workspace_id, project_id, assignee_user_id)
+        validated_ids = _validate_assignees(db, workspace_id, project_id, assignee_user_ids)
         task = Task(
             workspace_id=workspace_id,
             project_id=project_id,
@@ -202,15 +224,23 @@ def create_task(
             labels=labels,
             status=status,
             due_date=due_date,
-            assignee_user_id=assignee_user_id,
             priority=priority,
             position=position,
         )
         db.add(task)
         db.flush()
+        for user_id in validated_ids:
+            db.add(
+                TaskAssignee(
+                    task_id=task.id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                )
+            )
         metadata: dict[str, object] = {"status": status, "priority": priority}
-        if assignee_user_id is not None:
-            metadata["assignee_user_id"] = str(assignee_user_id)
+        if validated_ids:
+            metadata["assignee_user_ids"] = [str(user_id) for user_id in validated_ids]
         _activity(db, workspace_id, project_id, actor_id, "task.created", "task", task.id, metadata)
         db.flush()
         result = _get_task_response(db, task.id)
@@ -250,9 +280,20 @@ def list_tasks(
         if priority:
             statement = statement.where(Task.priority == priority)
         if unassigned:
-            statement = statement.where(Task.assignee_user_id.is_(None))
+            statement = statement.where(
+                ~select(TaskAssignee.task_id)
+                .where(TaskAssignee.task_id == Task.id)
+                .exists()
+            )
         elif assignee_user_id is not None:
-            statement = statement.where(Task.assignee_user_id == assignee_user_id)
+            statement = statement.where(
+                select(TaskAssignee.task_id)
+                .where(
+                    TaskAssignee.task_id == Task.id,
+                    TaskAssignee.user_id == assignee_user_id,
+                )
+                .exists()
+            )
         if due_date is not None:
             statement = statement.where(Task.due_date == due_date)
         if due_before is not None:
@@ -272,7 +313,11 @@ def list_tasks(
         if sort_by == "due_date":
             order = order.nulls_last()
         rows = db.execute(statement.order_by(order, Task.id).limit(limit).offset(offset)).all()
-        return [_task_response_row(row) for row in rows]
+        assignees = _assignees_by_task(db, [row[0].id for row in rows])
+        return [
+            _task_response_row(row, assignees.get(row[0].id, []))
+            for row in rows
+        ]
 
 
 def get_task(
@@ -312,25 +357,61 @@ def update_task(
         )
         _require_active_project(project)
         _require_collaborator(access)
-        if "assignee_user_id" in changes:
-            _validate_assignee(db, workspace_id, project_id, changes["assignee_user_id"])
-        previous_assignee = task.assignee_user_id
+
+        assignee_user_ids = changes.pop("assignee_user_ids", None)
+        previous_assignee_ids: list[UUID] = []
+        if assignee_user_ids is not None:
+            assignee_user_ids = _validate_assignees(
+                db, workspace_id, project_id, assignee_user_ids
+            )
+            previous_assignee_ids = list(
+                db.scalars(
+                    select(TaskAssignee.user_id).where(TaskAssignee.task_id == task_id)
+                ).all()
+            )
+
         changed = {
             field: value for field, value in changes.items() if getattr(task, field) != value
         }
         for field, value in changed.items():
             setattr(task, field, value)
-        if changed:
-            if "assignee_user_id" in changed:
+
+        assignees_changed = assignee_user_ids is not None and set(assignee_user_ids) != set(
+            previous_assignee_ids
+        )
+        if assignees_changed:
+            current_ids = set(previous_assignee_ids)
+            target_ids = set(assignee_user_ids or [])
+            for user_id in current_ids - target_ids:
+                db.execute(
+                    delete(TaskAssignee).where(
+                        TaskAssignee.task_id == task_id,
+                        TaskAssignee.user_id == user_id,
+                    )
+                )
+            for user_id in target_ids - current_ids:
+                db.add(
+                    TaskAssignee(
+                        task_id=task_id,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        project_id=project_id,
+                    )
+                )
+
+        if changed or assignees_changed:
+            if assignees_changed:
                 action = "task.assignee_changed"
                 metadata: dict[str, object] = {
-                    "previous_assignee_user_id": (
-                        str(previous_assignee) if previous_assignee is not None else None
+                    "previous_assignee_user_ids": [
+                        str(user_id) for user_id in sorted(previous_assignee_ids, key=str)
+                    ],
+                    "new_assignee_user_ids": [
+                        str(user_id) for user_id in sorted(assignee_user_ids or [], key=str)
+                    ],
+                    "fields": sorted(
+                        set(changed) | ({"assignee_user_ids"} if assignees_changed else set())
                     ),
-                    "new_assignee_user_id": (
-                        str(task.assignee_user_id) if task.assignee_user_id is not None else None
-                    ),
-                    "fields": sorted(changed),
                 }
             else:
                 action = "task.updated"

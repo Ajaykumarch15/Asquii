@@ -14,6 +14,7 @@ EXPECTED_TABLES = {
     "project_members",
     "milestones",
     "tasks",
+    "task_assignees",
     "task_subtasks",
     "task_comments",
     "meetings",
@@ -69,11 +70,22 @@ def test_tenant_relationships_use_composite_foreign_keys():
         for constraint in tasks.foreign_key_constraints
     }
     assert ("projects.id", "projects.workspace_id") in task_targets
+
+    assignees = Base.metadata.tables["task_assignees"]
+    assignee_targets = {
+        tuple(element.target_fullname for element in constraint.elements)
+        for constraint in assignees.foreign_key_constraints
+    }
+    assert (
+        "tasks.id",
+        "tasks.workspace_id",
+        "tasks.project_id",
+    ) in assignee_targets
     assert (
         "project_members.workspace_id",
         "project_members.project_id",
         "project_members.user_id",
-    ) in task_targets
+    ) in assignee_targets
 
 
 def test_workspace_and_project_role_guards_exist():

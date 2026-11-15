@@ -10,7 +10,7 @@ Stable body: `{"error":{"code":"forbidden","message":"You do not have access to 
 |---|---|---|
 | Supabase SDK auth operations | Supabase Auth | Registration/login/logout/recovery/refresh remain provider-managed; no FastAPI password proxy |
 | `GET /api/v1/auth/me` | Authenticated | — → safe profile fields for verified subject |
-| `PATCH /api/v1/me` | Self | display_name/job_title → profile; bounded strings |
+| `PATCH /api/v1/auth/me` | Self | display_name/job_title → profile; bounded strings; email and roles are not editable |
 | `GET /api/v1/workspaces` | Authenticated | cursor → active memberships/workspaces |
 | `POST /api/v1/workspaces` | Authenticated | name → generated unique slug, workspace and initial Owner atomically |
 | `GET /api/v1/workspaces/{wid}` | Active member | — → workspace |
@@ -37,9 +37,9 @@ Stable body: `{"error":{"code":"forbidden","message":"You do not have access to 
 | `POST /api/v1/workspaces/{wid}/projects/{pid}/transfer-manager` | Owner/Admin or Project Manager | target active project member; atomic role transfer |
 | `GET/POST /api/v1/workspaces/{wid}/projects/{pid}/milestones` | Workspace member read / Owner/Admin or Manager write | milestone name and due date |
 | `GET/PATCH/DELETE /api/v1/workspaces/{wid}/projects/{pid}/milestones/{mid}` | Workspace member read / Owner/Admin or Manager write | scoped milestone details/update/delete |
-| `GET/POST /api/v1/workspaces/{wid}/projects/{pid}/tasks` | Active workspace member read / Owner/Admin or project member write | bounded filters/pagination; create title/description/status/priority/assignee/due/labels; assignee must be active project member |
+| `GET/POST /api/v1/workspaces/{wid}/projects/{pid}/tasks` | Active workspace member read / Owner/Admin or project member write | bounded filters/pagination; create title/description/status/priority/assignees/due/labels; each assignee must be active project member |
 | `GET/PATCH/DELETE /api/v1/workspaces/{wid}/projects/{pid}/tasks/{tid}` | Active workspace member read / collaborator update / Owner/Admin or Project Manager delete | task fields align to schema; delete is hard delete only without comments; subtasks cascade |
-| `PATCH /api/v1/workspaces/{wid}/projects/{pid}/tasks/{tid}/assignee` | Owner/Admin or project member | `{assignee_user_id}`; null unassigns, otherwise active project member |
+| `PATCH /api/v1/workspaces/{wid}/projects/{pid}/tasks/{tid}/assignee` | Owner/Admin or project member | `{assignee_user_ids: [uuid, ...]}`; an empty array unassigns, each id must be an active project member |
 | `GET/POST /api/v1/workspaces/{wid}/projects/{pid}/tasks/{tid}/subtasks` | Active workspace member read / collaborator write | ordered subtasks; `is_done` toggles completion |
 | `GET/PATCH/DELETE /api/v1/workspaces/{wid}/projects/{pid}/tasks/{tid}/subtasks/{sid}` | Active workspace member read / collaborator write | scoped item; delete is physical and recorded as activity |
 | `GET/POST /api/v1/workspaces/{wid}/projects/{pid}/tasks/{tid}/comments` | Active workspace member read / project collaborator write | paginated; comment author must have project roster membership per current FK |

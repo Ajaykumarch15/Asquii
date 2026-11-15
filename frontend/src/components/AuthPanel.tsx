@@ -33,7 +33,10 @@ export function AuthPanel({ open, onClose, initialMode = "sign-in" }: { open: bo
 
   if (!open) return null;
 
-  const busy = submitting || status === "unconfigured" || status === "loading";
+  // A background session restore must never block an explicit sign-in: the
+  // SDK's sign-in call does not wait for initialization, so it can recover
+  // even when restoring the previous session is stuck.
+  const busy = submitting || status === "unconfigured";
 
   async function submit(event: FormEvent) {
     event.preventDefault();

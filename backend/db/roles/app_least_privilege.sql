@@ -31,10 +31,10 @@ GRANT CONNECT ON DATABASE __ASQUII_DB_NAME__ TO asquii_app;
 GRANT USAGE ON SCHEMA public TO asquii_app;
 
 -- =====================================================================
--- Tables owned by the application (15 UUID-keyed tables; none of the
+-- Tables owned by the application (16 UUID-keyed tables; none of the
 -- app primary keys uses sequences, so no sequence grants are required).
 -- =====================================================================
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.activity_logs, public.meeting_attendees, public.meetings, public.milestones, public.profiles, public.project_members, public.projects, public.resources, public.task_comments, public.task_subtasks, public.tasks, public.user_resource_preferences, public.workspace_invitations, public.workspace_members, public.workspaces TO asquii_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.activity_logs, public.meeting_attendees, public.meetings, public.milestones, public.profiles, public.project_members, public.projects, public.resources, public.task_assignees, public.task_comments, public.task_subtasks, public.tasks, public.user_resource_preferences, public.workspace_invitations, public.workspace_members, public.workspaces TO asquii_app;
 
 -- =====================================================================
 -- Future-proofing: tables created by later migrations (run as `postgres`)

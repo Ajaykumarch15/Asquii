@@ -39,7 +39,7 @@ class TaskCreate(BaseModel):
     labels: list[str] = Field(default_factory=list, max_length=100)
     status: TaskStatus = "To do"
     due_date: date | None = None
-    assignee_user_id: UUID | None = None
+    assignee_user_ids: list[UUID] = Field(default_factory=list, max_length=50)
     priority: TaskPriority = "Medium"
     position: Decimal = Decimal("0")
 
@@ -75,7 +75,7 @@ class TaskUpdate(BaseModel):
     labels: list[str] | None = Field(default=None, max_length=100)
     status: TaskStatus | None = None
     due_date: date | None = None
-    assignee_user_id: UUID | None = None
+    assignee_user_ids: list[UUID] | None = Field(default=None, max_length=50)
     priority: TaskPriority | None = None
     position: Decimal | None = None
 
@@ -108,19 +108,24 @@ class TaskUpdate(BaseModel):
     def validate_patch(self) -> "TaskUpdate":
         if not self.model_fields_set:
             raise ValueError("At least one supported field is required")
-        nullable = {"due_date", "assignee_user_id"}
+        nullable = {"due_date"}
         if any(
             field not in nullable and getattr(self, field) is None
             for field in self.model_fields_set
         ):
-            raise ValueError("Only due_date and assignee_user_id may be null")
+            raise ValueError("Only due_date may be null")
         return self
 
 
 class TaskAssigneeUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    assignee_user_id: UUID | None
+    assignee_user_ids: list[UUID] = Field(max_length=50)
+
+
+class TaskAssigneeSummary(BaseModel):
+    user_id: UUID
+    display_name: str
 
 
 class TaskResponse(BaseModel):
@@ -132,8 +137,8 @@ class TaskResponse(BaseModel):
     labels: list[str]
     status: TaskStatus
     due_date: date | None
-    assignee_user_id: UUID | None
-    assignee_display_name: str | None
+    assignee_user_ids: list[UUID]
+    assignees: list[TaskAssigneeSummary]
     priority: TaskPriority
     position: Decimal
     created_at: datetime
